@@ -20,8 +20,7 @@ classifiers = [
 ]
 requires-python = ">=3.9"
 dependencies = [
-    "matplotlib",
-    "numpy",
+    "PySide6>=6.7",
 ]
 
 [tool.setuptools.packages]
@@ -29,3 +28,6 @@ find = {}
 
 [project.urls]
 source = "https://github.com/gbuzzard/overleaf_file_system"
+
+[project.scripts]
+overleaf-fs = "overleaf_fs.gui.main_window:main"
