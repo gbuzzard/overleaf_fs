@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "overleaf_file_system"
+version = "0.0.1"
+description = "GUI-based project organization for Overleaf"
+keywords = ["overleaf", "file system"]
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Greg Buzzard", email = "buzzard@purdue.edu" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent"
+]
+requires-python = ">=3.9"
+dependencies = [
+    "matplotlib",
+    "numpy",
+]
+
+[tool.setuptools.packages]
+find = {}
+
+[project.urls]
+source = "https://github.com/gbuzzard/overleaf_file_system"
