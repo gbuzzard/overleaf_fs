@@ -1,4 +1,3 @@
-# overleaf_fs/gui/main_window.py
 
 
 """
@@ -36,7 +35,8 @@ main window:
   keyboard shortcut) that re-loads the dummy index. Later, the same
   hook will trigger a real sync/refresh from Overleaf.
 - The search box filters projects by matching the search text
-  (case-insensitive) against the Name, Owner, and Notes columns.
+  (case-insensitive) against the Name, Owner, and Local folder
+  columns.
 - Selecting nodes in the tree applies an additional folder-based
   filter (All projects, pinned projects, the Home folder, or a
   specific folder subtree).
@@ -51,10 +51,11 @@ Overleaf integration.
 
 from __future__ import annotations
 import sys
+import json
 from typing import Optional
 
-from PySide6.QtCore import Qt, QUrl, QModelIndex, QSortFilterProxyModel
-from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtCore import Qt, QUrl, QModelIndex, QSortFilterProxyModel, QMimeData, QPoint
+from PySide6.QtGui import QAction, QDesktopServices, QDrag
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -67,6 +68,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QInputDialog,
     QMessageBox,
+    QAbstractItemView,
 )
 
 from overleaf_fs.core.project_index import load_project_index
@@ -75,6 +77,7 @@ from overleaf_fs.core.metadata_store import (
     create_folder,
     rename_folder,
     delete_folder,
+    move_projects_to_folder,
 )
 from overleaf_fs.gui.project_table_model import ProjectTableModel
 from overleaf_fs.gui.project_tree import (
@@ -84,13 +87,14 @@ from overleaf_fs.gui.project_tree import (
 )
 
 
+
 class _ProjectSortFilterProxyModel(QSortFilterProxyModel):
     """
     Proxy model that adds sorting and combined text/folder filtering
     on top of ``ProjectTableModel``.
 
     The text filter matches the search text (case-insensitive) against a
-    subset of columns (currently: Name, Owner, Notes). The folder
+    subset of columns (currently: Name, Owner, Local folder). The folder
     filter restricts rows to those that match the selected node in the
     project tree (All Projects, Pinned, Home, or a specific folder
     subtree).
@@ -102,9 +106,8 @@ class _ProjectSortFilterProxyModel(QSortFilterProxyModel):
         # Folder filter key: one of:
         #   - ALL_KEY (all non-hidden projects),
         #   - PINNED_KEY (only pinned projects),
-        #   - "" (the Home folder: projects with no folder assigned),
-        #   - a folder path string ("CT", "Teaching/2025").
         #   - "" (the Home folder: projects with folder in (None, "")),
+        #   - a folder path string ("CT", "Teaching/2025").
         self._folder_key: Optional[str] = ALL_KEY
 
         self.setFilterCaseSensitivity(Qt.CaseInsensitive)
@@ -122,7 +125,7 @@ class _ProjectSortFilterProxyModel(QSortFilterProxyModel):
 
         Args:
             text (str): Case-insensitive substring to match against
-                Name, Owner, and Notes.
+                Name, Owner, and Local folder.
         """
         self._filter_text = text.strip()
         self.invalidateFilter()
@@ -198,11 +201,11 @@ class _ProjectSortFilterProxyModel(QSortFilterProxyModel):
 
         text = self._filter_text.lower()
 
-        # Check Name, Owner, and Notes columns via the source model.
+        # Check Name, Owner, and Local folder columns via the source model.
         columns_to_check = [
             ProjectTableModel.COLUMN_NAME,
             ProjectTableModel.COLUMN_OWNER,
-            ProjectTableModel.COLUMN_NOTES,
+            ProjectTableModel.COLUMN_FOLDER,
         ]
 
         for col in columns_to_check:
@@ -214,6 +217,166 @@ class _ProjectSortFilterProxyModel(QSortFilterProxyModel):
                 return True
 
         return False
+
+
+# --------------------------------------------------------------------------
+# Drag-capable table view for project rows
+# --------------------------------------------------------------------------
+class ProjectTableView(QTableView):
+    """
+    QTableView subclass that initiates drag operations containing the
+    ids of the selected projects.
+
+    The view assumes that its model is a ``QSortFilterProxyModel`` whose
+    source model is a ``ProjectTableModel``. When a drag is started, the
+    selected rows are mapped back to the underlying ``ProjectRecord``
+    instances and the project ids are packaged into the mime data under
+    the custom type ``"application/x-overleaf-fs-project-ids"``.
+
+    The corresponding drop logic lives in ``ProjectTree``, which can
+    interpret this mime data and emit a high-level signal asking the
+    controller to move the projects into a target folder.
+    """
+
+    MIME_TYPE = "application/x-overleaf-fs-project-ids"
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        # Drag source; we do not accept drops here.
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragOnly)
+        # Select whole rows; allow multiple selection so users can move
+        # more than one project at a time.
+        self.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        # Track where a potential drag started so we can trigger a drag
+        # once the mouse has moved far enough.
+        self._drag_start_pos: Optional[QPoint] = None
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        """
+        Remember the position where a potential drag started.
+
+        This lets us explicitly start a drag once the cursor has moved
+        far enough, rather than relying on the base class heuristics.
+
+        To support dragging multiple selected rows, we avoid resetting
+        the selection when the user clicks on an already-selected row
+        without any modifier keys. In that case, we simply record the
+        drag start position and let ``mouseMoveEvent`` initiate the drag.
+        """
+        if event.button() == Qt.LeftButton:
+            pos = event.position().toPoint()
+            self._drag_start_pos = pos
+
+            index = self.indexAt(pos)
+            selection_model = self.selectionModel()
+
+            # If the user clicks on an already-selected row with no
+            # modifiers, do not change the selection. This preserves
+            # multi-row selection so that all selected rows participate
+            # in the subsequent drag.
+            if (
+                index.isValid()
+                and selection_model is not None
+                and selection_model.isSelected(index)
+                and not (event.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier | Qt.MetaModifier))
+            ):
+                return
+
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        """
+        Start a drag when the left button is held and the cursor has
+        moved further than the platform drag threshold.
+        """
+        from PySide6.QtWidgets import QApplication
+
+        if (
+            event.buttons() & Qt.LeftButton
+            and self._drag_start_pos is not None
+        ):
+            # Check whether we've moved far enough to initiate a drag.
+            distance = (event.position().toPoint() - self._drag_start_pos).manhattanLength()
+            if distance >= QApplication.startDragDistance():
+                # Start a drag with Move semantics; the implementation
+                # of startDrag() below will package the selected project
+                # ids into the mime data.
+                self.startDrag(Qt.MoveAction)
+                return
+
+        super().mouseMoveEvent(event)
+
+    def startDrag(self, supportedActions) -> None:  # type: ignore[override]
+        """
+        Start a drag containing the ids of the selected projects.
+
+        If the model is not a ``QSortFilterProxyModel`` backed by a
+        ``ProjectTableModel``, this falls back to the default behavior.
+        """
+        model = self.model()
+        if model is None:
+            return
+
+        # We expect the view to be backed by a proxy model, but fall
+        # back gracefully if that is not the case.
+        proxy_model = None
+        source_model = model
+
+        if isinstance(model, QSortFilterProxyModel):
+            proxy_model = model
+            source_model = model.sourceModel()
+
+        from overleaf_fs.gui.project_table_model import ProjectTableModel as _PTM
+
+        if not isinstance(source_model, _PTM):
+            # Unknown model type; delegate to default implementation.
+            return super().startDrag(supportedActions)
+
+        selection_model = self.selectionModel()
+        if selection_model is None:
+            return
+
+        selected_rows = selection_model.selectedRows()
+        if not selected_rows:
+            return
+
+        project_ids = []
+        for index in selected_rows:
+            if proxy_model is not None:
+                source_index = proxy_model.mapToSource(index)
+            else:
+                source_index = index
+
+            row = source_index.row()
+            if row < 0:
+                continue
+
+            record = source_model.project_at(row)
+            if record is None:
+                continue
+
+            # Prefer a direct id attribute; fall back to remote.id if needed.
+            project_id = getattr(record, "id", None)
+            if project_id is None and getattr(record, "remote", None) is not None:
+                project_id = getattr(record.remote, "id", None)
+
+            if not isinstance(project_id, str):
+                continue
+
+            project_ids.append(project_id)
+
+        if not project_ids:
+            return
+
+        mime = QMimeData()
+        payload = json.dumps(project_ids).encode("utf-8")
+        mime.setData(self.MIME_TYPE, payload)
+
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.MoveAction)
 
 
 class MainWindow(QMainWindow):
@@ -237,8 +400,12 @@ class MainWindow(QMainWindow):
         self._proxy = _ProjectSortFilterProxyModel(self)
         self._proxy.setSourceModel(self._model)
 
-        # Table view.
-        self._table = QTableView(self)
+        # Track the currently selected folder key so that we can
+        # preserve the user's view across reloads.
+        self._current_folder_key: Optional[str] = ALL_KEY
+
+        # Table view (drag-capable).
+        self._table = ProjectTableView(self)
         self._table.setModel(self._proxy)
         self._configure_table()
 
@@ -256,6 +423,7 @@ class MainWindow(QMainWindow):
         self._tree.createFolderRequested.connect(self._on_create_folder)
         self._tree.renameFolderRequested.connect(self._on_rename_folder)
         self._tree.deleteFolderRequested.connect(self._on_delete_folder)
+        self._tree.moveProjectsRequested.connect(self._on_move_projects)
 
         # Right-hand panel: search box + table.
         right = QWidget(self)
@@ -303,8 +471,6 @@ class MainWindow(QMainWindow):
         header.setStretchLastSection(True)
         header.setSectionResizeMode(QHeaderView.Interactive)
 
-        self._table.setSelectionBehavior(QTableView.SelectRows)
-        self._table.setSelectionMode(QTableView.SingleSelection)
         self._table.setAlternatingRowColors(True)
         # Enable sorting via the proxy model. Users can click on column
         # headers to sort by any visible column.
@@ -366,11 +532,15 @@ class MainWindow(QMainWindow):
         """
         Load (or reload) the project index and update the table model.
 
-        At this stage this simply calls ``load_project_index()`` from
-        ``overleaf_fs.core.project_index``, which returns a static set
-        of sample projects. This hook will later be replaced with logic
-        that reads persistent metadata and refreshes from Overleaf.
+        This loads the project index and local state, rebuilds the
+        folder tree from the union of known folders and per-project
+        assignments, and then attempts to restore the previously
+        selected folder (All Projects, Pinned, Home, or a specific
+        folder path).
         """
+        # Remember whichever folder key we were last told about.
+        current_key = getattr(self, "_current_folder_key", ALL_KEY)
+
         index = load_project_index()
         self._model.set_projects(index)
 
@@ -384,6 +554,15 @@ class MainWindow(QMainWindow):
                 folder_paths.add(folder)
 
         self._tree.set_folders(sorted(folder_paths))
+
+        # Try to restore the previous selection so that operations like
+        # drag-and-drop do not unexpectedly change the user's view.
+        try:
+            self._tree.select_folder_key(current_key)
+        except AttributeError:
+            # Older versions of ProjectTree may not have select_folder_key;
+            # in that case we simply leave whatever selection Qt chooses.
+            pass
 
         status = self.statusBar()
         if status is not None:
@@ -404,6 +583,10 @@ class MainWindow(QMainWindow):
         """
         if not isinstance(key, (str, type(None))):
             return
+
+        # Remember the current folder key so we can restore this view
+        # after reloading projects and folders.
+        self._current_folder_key = key
         self._proxy.setFolderKey(key)
 
     def _on_create_folder(self, parent_path: object) -> None:
@@ -554,6 +737,37 @@ class MainWindow(QMainWindow):
                 self,
                 "Error deleting folder",
                 f"Could not delete folder '{folder_path}':\n{exc}",
+            )
+            return
+
+        self._load_projects()
+
+    def _on_move_projects(self, project_ids: list, folder_path: object) -> None:
+        """
+        Slot called when the tree requests moving one or more projects
+        into a folder via drag-and-drop.
+
+        Updates local metadata via ``move_projects_to_folder()`` and
+        reloads the project index and folder tree so that both the tree
+        and the table reflect the new assignments.
+        """
+        if not isinstance(project_ids, list):
+            return
+        if not all(isinstance(pid, str) for pid in project_ids):
+            return
+
+        # folder_path may be "" (Home) or a real folder string, or None
+        # (treated like Home by the metadata helper).
+        if not isinstance(folder_path, (str, type(None))):
+            return
+
+        try:
+            move_projects_to_folder(project_ids, folder_path)
+        except Exception as exc:  # pragma: no cover - defensive
+            QMessageBox.warning(
+                self,
+                "Error moving projects",
+                f"Could not move projects:\n{exc}",
             )
             return
 

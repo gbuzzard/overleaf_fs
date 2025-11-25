@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 """
 Tree widget for navigating Overleaf projects by virtual folder.
 
@@ -30,7 +32,7 @@ from typing import List, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
-from PySide6.QtWidgets import QTreeView, QMenu
+from PySide6.QtWidgets import QTreeView, QMenu, QAbstractItemView
 
 
 # Custom role for storing folder paths on tree items.
@@ -39,6 +41,9 @@ FolderPathRole = Qt.UserRole + 1
 # Sentinel values for special nodes.
 ALL_KEY = "__ALL__"
 PINNED_KEY = "__PINNED__"
+
+# MIME type for drags originating from the project table view.
+PROJECT_IDS_MIME = "application/x-overleaf-fs-project-ids"
 
 
 class ProjectTree(QTreeView):
@@ -57,12 +62,16 @@ class ProjectTree(QTreeView):
             the given path.
         deleteFolderRequested (str): Request to delete the folder subtree
             rooted at the given path.
+        moveProjectsRequested (List[str], str | None): Request to move the
+            given project ids into the target folder path (or Home if the
+            path is None/empty).
     """
 
     folderSelected = Signal(object)
     createFolderRequested = Signal(object)
     renameFolderRequested = Signal(str)
     deleteFolderRequested = Signal(str)
+    moveProjectsRequested = Signal(list, object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -70,6 +79,11 @@ class ProjectTree(QTreeView):
         self._model = QStandardItemModel(self)
         self.setModel(self._model)
         self.setHeaderHidden(True)
+
+        # Accept drops from the project table; we only originate drags
+        # from the table and treat the tree as a pure drop target.
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DropOnly)
 
         # Clicking updates selection.
         self.selectionModel().currentChanged.connect(self._on_current_changed)
@@ -138,6 +152,83 @@ class ProjectTree(QTreeView):
             if child.text() == label:
                 return child
         return None
+
+    def _folder_path_for_index(self, index) -> Optional[str]:
+        """
+        Resolve the effective folder path for a drop/selection index.
+
+        Returns:
+            str | None: The folder path string, or "" for the Home node,
+            or None if the index does not correspond to a valid folder
+            drop target (e.g. All Projects or Pinned).
+        """
+        if not index.isValid():
+            return None
+
+        item = self._model.itemFromIndex(index)
+        if item is None:
+            return None
+
+        key = item.data(FolderPathRole)
+        text = item.text()
+
+        if key in (ALL_KEY, PINNED_KEY):
+            # Not a valid drop target.
+            return None
+        if key is None and text == "Home":
+            # Home root node.
+            return ""
+        if isinstance(key, str):
+            # Real folder path.
+            return key
+        return None
+
+    def select_folder_key(self, key: Optional[str]) -> None:
+        """
+        Select the tree node corresponding to the given folder key.
+
+        Args:
+            key (Optional[str]): One of:
+                - ALL_KEY,
+                - PINNED_KEY,
+                - "" or None (Home),
+                - a folder path string.
+        """
+        root = self._model.invisibleRootItem()
+        if root is None:
+            return
+
+        def _match_item(item) -> bool:
+            item_key = item.data(FolderPathRole)
+            text = item.text()
+            if key == ALL_KEY:
+                return item_key == ALL_KEY
+            if key == PINNED_KEY:
+                return item_key == PINNED_KEY
+            if key in (None, ""):
+                return item_key is None and text == "Home"
+            return isinstance(item_key, str) and item_key == key
+
+        def _dfs_find(item):
+            if _match_item(item):
+                return item
+            for i in range(item.rowCount()):
+                child = item.child(i)
+                if child is None:
+                    continue
+                found = _dfs_find(child)
+                if found is not None:
+                    return found
+            return None
+
+        for r in range(root.rowCount()):
+            top = root.child(r)
+            if top is None:
+                continue
+            found = _dfs_find(top)
+            if found is not None:
+                self.setCurrentIndex(found.index())
+                return
 
     # ------------------------------------------------------------------
     # Selection handling
@@ -213,3 +304,76 @@ class ProjectTree(QTreeView):
 
         if not menu.isEmpty():
             menu.exec(event.globalPos())
+
+    # ------------------------------------------------------------------
+    # Drag-and-drop handling (drop target for project ids)
+    # ------------------------------------------------------------------
+    def dragEnterEvent(self, event) -> None:
+        """Accept drags that carry project ids and target a folder."""
+        mime = event.mimeData()
+        if not mime or not mime.hasFormat(PROJECT_IDS_MIME):
+            event.ignore()
+            return
+
+        folder_path = self._folder_path_for_index(self.indexAt(event.pos()))
+        if folder_path is None:
+            event.ignore()
+            return
+
+        event.acceptProposedAction()
+
+    def dragMoveEvent(self, event) -> None:
+        """Continue to accept drags over valid folder targets."""
+        mime = event.mimeData()
+        if not mime or not mime.hasFormat(PROJECT_IDS_MIME):
+            event.ignore()
+            return
+
+        folder_path = self._folder_path_for_index(self.indexAt(event.pos()))
+        if folder_path is None:
+            event.ignore()
+            return
+
+        event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        """
+        Handle a drop of project ids onto a folder node.
+
+        The tree itself does not mutate metadata; it simply parses the
+        project ids from the mime data and emits a high-level signal
+        that a controller (e.g. MainWindow) can handle by updating the
+        local state via ``metadata_store``.
+        """
+        mime = event.mimeData()
+        if not mime or not mime.hasFormat(PROJECT_IDS_MIME):
+            event.ignore()
+            return
+
+        folder_path = self._folder_path_for_index(self.indexAt(event.pos()))
+        if folder_path is None:
+            event.ignore()
+            return
+
+        try:
+            data = bytes(mime.data(PROJECT_IDS_MIME))
+            project_ids = json.loads(data.decode("utf-8"))
+        except Exception:
+            event.ignore()
+            return
+
+        if not isinstance(project_ids, list):
+            event.ignore()
+            return
+
+        # Filter to strings only.
+        cleaned_ids = [pid for pid in project_ids if isinstance(pid, str)]
+        if not cleaned_ids:
+            event.ignore()
+            return
+
+        # Emit the high-level move request. Home is represented by the
+        # empty string "" at this stage; callers may normalize this if
+        # they wish to treat None and "" equivalently.
+        self.moveProjectsRequested.emit(cleaned_ids, folder_path)
+        event.acceptProposedAction()

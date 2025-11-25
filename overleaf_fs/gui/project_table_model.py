@@ -7,21 +7,21 @@ Summary of design:
 - The core data model for projects lives in ``overleaf_fs.core.models`` as
   ``ProjectRecord`` and ``ProjectIndex``, which cleanly separate
   "remote" fields (mirrored from Overleaf: id, name, owner, last
-  modified, URL) from "local" fields (folder, notes, pinned, hidden).
+  modified, URL) from "local" fields (folder, pinned, hidden).
 - This file provides a thin adapter layer between that in-memory
   representation and the Qt view system by implementing a
   ``QAbstractTableModel``. The GUI can attach a ``QTableView`` (and
   optionally a ``QSortFilterProxyModel`` for searching and sorting)
   to this model to present a Finder-like table of Overleaf projects.
 - The table currently exposes four columns: Name, Owner, Last
-  Modified, and Notes. These are enough to make the GUI useful while
-  keeping the model simple. Additional columns can be added later by
-  extending ``_COLUMN_DEFINITIONS`` without changing the rest of the
-  application.
+  Modified, and Local folder. These are enough to make the GUI useful
+  while keeping the model simple. Additional columns can be added
+  later by extending ``_COLUMN_DEFINITIONS`` without changing the rest
+  of the application.
 - The model is read-only for now: editing of project metadata
-  (e.g. notes, pinned, hidden) will be handled via dedicated dialogs
-  or other UI elements that update the underlying ``ProjectRecord``
-  objects and then notify the model to refresh.
+  (e.g. folder assignment, pinned, hidden) will be handled via
+  dedicated dialogs or other UI elements that update the underlying
+  ``ProjectRecord`` objects and then notify the model to refresh.
 """
 
 from typing import List, Optional
@@ -41,7 +41,7 @@ class ProjectTableModel(QAbstractTableModel):
     store and passing it into this model via :meth:`set_projects`.
 
     Rows correspond to individual projects; columns correspond to
-    specific fields (name, owner, last modified, notes). The model is
+    specific fields (name, owner, last modified, local folder). The model is
     read-only and intended to be combined with a
     ``QSortFilterProxyModel`` for sorting and filtering in the GUI.
     """
@@ -50,13 +50,13 @@ class ProjectTableModel(QAbstractTableModel):
     COLUMN_NAME = 0
     COLUMN_OWNER = 1
     COLUMN_LAST_MODIFIED = 2
-    COLUMN_NOTES = 3
+    COLUMN_FOLDER = 3
 
     _COLUMN_DEFINITIONS = [
         (COLUMN_NAME, "Name"),
         (COLUMN_OWNER, "Owner"),
         (COLUMN_LAST_MODIFIED, "Last modified"),
-        (COLUMN_NOTES, "Local notes"),
+        (COLUMN_FOLDER, "Local folder"),
     ]
 
     def __init__(
@@ -150,8 +150,11 @@ class ProjectTableModel(QAbstractTableModel):
                         sep=" ", timespec="seconds"
                     )
                 return record.remote.last_modified_raw or ""
-            if col == self.COLUMN_NOTES:
-                return record.local.notes or ""
+            if col == self.COLUMN_FOLDER:
+                # Show the local folder assignment, treating the Home
+                # folder (no explicit folder) as "Home" for readability.
+                folder = record.local.folder
+                return folder if folder not in (None, "") else "Home"
 
         if role == Qt.TextAlignmentRole:
             # Left-align text in all columns for now.
@@ -195,7 +198,7 @@ class ProjectTableModel(QAbstractTableModel):
         """
         Items are selectable and enabled but not editable.
 
-        Editing of local metadata (notes, pinned, hidden) can be
+        Editing of local metadata (folder, pinned, hidden) can be
         implemented later by overriding this method and adding the
         ``Qt.ItemIsEditable`` flag for specific columns, together with
         an implementation of ``setData``.

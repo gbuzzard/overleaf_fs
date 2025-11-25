@@ -26,13 +26,11 @@ is intentionally lightweight and stable:
       "projects": {
         "abcdef123456": {
           "folder": "CT",
-          "notes": "Draft due soon",
           "pinned": true,
           "hidden": false
         },
         "xyz987654321": {
           "folder": "Funding",
-          "notes": null,
           "pinned": false,
           "hidden": false
         }
@@ -66,7 +64,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional
+from typing import Dict, Iterable, List, Mapping, Optional
 
 from overleaf_fs.core.models import ProjectLocal
 from overleaf_fs.core import config
@@ -392,6 +390,64 @@ def delete_folder(folder_path: str, path: Optional[Path] = None) -> LocalState:
     save_local_state(state, path)
     return state
 
+
+def move_projects_to_folder(
+    project_ids: Iterable[str],
+    folder_path: Optional[str],
+    path: Optional[Path] = None,
+) -> LocalState:
+    """Assign the given projects to a folder in the local state.
+
+    This helper updates ``ProjectLocal.folder`` for each project id in
+    ``project_ids`` and persists the modified state to disk.
+
+    Semantics:
+
+    * ``folder_path`` of ``None`` or ``""`` assigns projects to the Home
+      folder (top-level). In the JSON representation this is stored as
+      an empty string.
+    * A non-empty ``folder_path`` (e.g. ``"CT"`` or ``"Teaching/2025"``)
+      is used as-is. If it does not already appear in ``state.folders``,
+      it is added to that list so that the tree view can display it.
+    * If a project id does not yet have a ``ProjectLocal`` entry, one is
+      created with default values for notes/pinned/hidden.
+
+    Args:
+        project_ids (Iterable[str]): Project ids to move.
+        folder_path (Optional[str]): Target folder path, or ``None``/``""``
+            for the Home folder.
+        path (Optional[Path]): Optional explicit JSON path. If omitted,
+            the default metadata path is used.
+
+    Returns:
+        LocalState: The updated local state after modifying project
+        assignments.
+    """
+    # Normalize the target folder: None and "" mean Home.
+    target = "" if folder_path in (None, "") else folder_path
+
+    state = load_local_state(path)
+
+    # Ensure the target folder exists in the folder list if it is
+    # non-empty. Home (empty string) is implicit and not stored in
+    # LocalState.folders.
+    if target and target not in state.folders:
+        state.folders.append(target)
+        state.folders.sort()
+
+    # Update or create per-project local metadata.
+    for proj_id in project_ids:
+        if not isinstance(proj_id, str):
+            continue
+        local = state.projects.get(proj_id)
+        if local is None:
+            local = ProjectLocal(folder=target, notes=None, pinned=False, hidden=False)
+            state.projects[proj_id] = local
+        else:
+            local.folder = target
+
+    save_local_state(state, path)
+    return state
 
 def load_local_metadata(path: Optional[Path] = None) -> Dict[str, ProjectLocal]:
     """

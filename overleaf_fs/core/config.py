@@ -16,7 +16,6 @@ project (see ``overleaf_fs.core.models.ProjectLocal``), such as:
 
 - the virtual folder path the project belongs to (single-folder
   membership, e.g. "CT" or "Teaching/2025"),
-- user notes,
 - pinned / hidden flags.
 
 This metadata does **not** live on Overleaf and is never pushed back
