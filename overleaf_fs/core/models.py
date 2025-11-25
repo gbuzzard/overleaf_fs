@@ -51,11 +51,10 @@ class ProjectLocal:
     These fields are never pushed back to Overleaf; they represent how
     you choose to organize and annotate projects on your own machine.
     """
-
-    #: Free-form tags used to build virtual folder trees and saved
-    #: views. A project can have multiple tags and appear in multiple
-    #: "folders" in the GUI.
-    tags: List[str] = field(default_factory=list)
+    # Folder path in the virtual project tree, or None/"" for
+    # the Home folder (root). Examples: "CT", "Teaching/2025" map to
+    # "Home/CT" and "Home/Teaching/2025"
+    folder: Optional[str] = None
 
     #: Optional free-form notes about the project (e.g. status,
     #: deadlines, TODOs).

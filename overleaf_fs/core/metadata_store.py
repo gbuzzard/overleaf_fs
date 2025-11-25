@@ -17,6 +17,12 @@ is intentionally lightweight and stable:
 
     {
       "version": 1,
+      "folders": [
+        "CT",
+        "Teaching",
+        "Teaching/2025",
+        "Funding"
+      ],
       "projects": {
         "abcdef123456": {
           "folder": "CT",
@@ -32,49 +38,38 @@ is intentionally lightweight and stable:
         }
       }
     }
-
+Note that the entry "" for "folder" indicates the top level directory,
+"Home/", which is prepended to all folders.  E.g., "CT" maps to "Home/CT".
 Only the local fields are stored. The remote fields are refreshed from
 Overleaf (or, currently, from dummy data) and merged with this local
 metadata into ``ProjectRecord`` instances elsewhere.
 
-At this stage the module provides:
+At this stage the module provides two layers of API:
 
-- ``load_local_metadata()``: load a mapping from project id to
-  ``ProjectLocal`` from the JSON file, or return an empty mapping if
-  the file does not exist or is unreadable.
-- ``save_local_metadata()``: write a mapping from project id to
-  ``ProjectLocal`` back to disk.
+- ``load_local_state()`` / ``save_local_state()``: work with a
+  ``LocalState`` object that includes both the explicit folder list
+  and the per-project ``ProjectLocal`` metadata.
+- ``load_local_metadata()`` / ``save_local_metadata()``: convenience
+  wrappers that deal only with the per-project mapping and preserve
+  any existing folder list on disk.
 
 By default the metadata file is stored under the user's home directory
 in ``~/.overleaf_fs/overleaf_projects.json``. This keeps the metadata
 separate from any particular project working directory while remaining
-easy to inspect and version-control if desired. Later we can
-centralize the path selection (e.g. under a config directory) in
-``config.py`` if needed.
+easy to inspect and version-control if desired. The exact path is
+determined by ``overleaf_fs.core.config.get_metadata_path()``, so that
+future multi-profile support can be added without changing callers.
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Mapping, Optional
+from typing import Dict, List, Mapping, Optional
 
 from overleaf_fs.core.models import ProjectLocal
-
-# Default location for the local metadata JSON, following the pattern of
-# tools like conda (~/.conda). This keeps the metadata under a single
-# hidden directory in the user's home.
-DEFAULT_METADATA_DIRNAME = ".overleaf_fs"
-DEFAULT_METADATA_FILENAME = "overleaf_projects.json"
-
-
-def _default_metadata_path() -> Path:
-    """
-    Return the default full path to the metadata JSON file,
-    stored under the user's home directory in ``~/.overleaf_fs/``.
-    """
-    home = Path.home()
-    return home / DEFAULT_METADATA_DIRNAME / DEFAULT_METADATA_FILENAME
+from overleaf_fs.core import config
 
 
 def _metadata_path(path: Optional[Path] = None) -> Path:
@@ -82,18 +77,35 @@ def _metadata_path(path: Optional[Path] = None) -> Path:
     Resolve the path to the metadata JSON file.
 
     If ``path`` is provided, it is returned as-is (converted to a
-    ``Path``). Otherwise, the default location
-    ``~/.overleaf_fs/overleaf_projects.json`` is used.
+    ``Path``). Otherwise, the centralized configuration helper
+    ``config.get_metadata_path()`` is used.
+
+    Centralizing this logic allows future multi-profile support
+    without modifying callers.
+
+    Args:
+        path (Optional[Path]): Explicit metadata file path. If provided,
+            this path is returned directly.
+
+    Returns:
+        Path: The resolved metadata file path, using
+        ``config.get_metadata_path()`` when no explicit path is given.
     """
     if path is not None:
         return Path(path)
-    return _default_metadata_path()
+    return config.get_metadata_path()
 
 
 def _project_local_to_dict(local: ProjectLocal) -> Dict:
     """
     Convert a ``ProjectLocal`` instance into a plain dict suitable
     for JSON serialization.
+
+    Args:
+        local (ProjectLocal): The local metadata to convert.
+
+    Returns:
+        Dict: A JSON‑serializable dictionary representation.
     """
     return {
         "folder": local.folder,
@@ -109,6 +121,12 @@ def _project_local_from_dict(data: Mapping) -> ProjectLocal:
 
     Missing fields are filled with sensible defaults so that older
     metadata files remain compatible if new fields are added later.
+
+    Args:
+        data (Mapping): Raw mapping loaded from JSON.
+
+    Returns:
+        ProjectLocal: A populated local metadata object.
     """
     folder = data.get("folder")
     notes = data.get("notes")
@@ -117,64 +135,99 @@ def _project_local_from_dict(data: Mapping) -> ProjectLocal:
     return ProjectLocal(folder=folder, notes=notes, pinned=pinned, hidden=hidden)
 
 
-def load_local_metadata(path: Optional[Path] = None) -> Dict[str, ProjectLocal]:
+@dataclass
+class LocalState:
     """
-    Load local project metadata from the JSON file.
+    Container for all local metadata persisted in the JSON file.
 
-    Parameters
-    ----------
-    path:
-        Optional explicit path to the metadata JSON file. If omitted,
-        the default location ``~/.overleaf_fs/overleaf_projects.json``
-        is used.
-
-    Returns
-    -------
-    dict
-        A mapping from project id (str) to ``ProjectLocal``. If the
-        file does not exist or cannot be parsed, an empty dict is
-        returned.
+    Attributes:
+        folders: Explicit list of folder paths known to the application, such
+            as "CT" or "Teaching/2025". This allows empty folders to be
+            persisted even if no project currently resides in them.
+            The Home folder is represented by the empty string "".
+        projects: Mapping from project id to ``ProjectLocal`` describing the
+            local metadata for each known project.
     """
-    metadata_file = _metadata_path(path)
-    if not metadata_file.exists():
-        return {}
 
-    try:
-        with metadata_file.open("r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        # On any I/O or JSON error, fall back to an empty mapping.
-        return {}
+    folders: List[str] = field(default_factory=list)
+    projects: Dict[str, ProjectLocal] = field(default_factory=dict)
 
+
+def _decode_state(raw: Mapping) -> LocalState:
+    """
+    Decode a raw JSON object into a LocalState.
+
+    This is tolerant of missing keys and unexpected shapes so that
+    older or partially written files do not cause hard failures.
+
+    Args:
+        raw (Mapping): Raw JSON object decoded from disk.
+
+    Returns:
+        LocalState: Decoded folder list and project metadata.
+    """
     projects_raw = raw.get("projects", {})
-    result: Dict[str, ProjectLocal] = {}
+    folders_raw = raw.get("folders", [])
 
+    projects: Dict[str, ProjectLocal] = {}
     if isinstance(projects_raw, dict):
         for proj_id, proj_data in projects_raw.items():
             if not isinstance(proj_id, str):
                 continue
             if not isinstance(proj_data, Mapping):
                 continue
-            result[proj_id] = _project_local_from_dict(proj_data)
+            projects[proj_id] = _project_local_from_dict(proj_data)
 
-    return result
+    folders: List[str] = []
+    if isinstance(folders_raw, list):
+        for entry in folders_raw:
+            if isinstance(entry, str) and entry:
+                folders.append(entry)
+
+    return LocalState(folders=folders, projects=projects)
 
 
-def save_local_metadata(
-    metadata: Mapping[str, ProjectLocal],
-    path: Optional[Path] = None,
-) -> None:
+def load_local_state(path: Optional[Path] = None) -> LocalState:
     """
-    Save local project metadata to the JSON file.
+    Load the full local state (folders and per-project metadata) from disk.
 
-    Parameters
-    ----------
-    metadata:
-        A mapping from project id (str) to ``ProjectLocal``.
-    path:
-        Optional explicit path to the metadata JSON file. If omitted,
-        the default location ``~/.overleaf_fs/overleaf_projects.json``
-        is used.
+    Args:
+        path (Optional[Path]): Optional explicit JSON path. If omitted,
+            the default path from ``config.get_metadata_path()`` is used.
+
+    Returns:
+        LocalState: Object containing folders and per‑project metadata.
+        If the file is missing or invalid, an empty LocalState is returned.
+    """
+    metadata_file = _metadata_path(path)
+    if not metadata_file.exists():
+        return LocalState()
+
+    try:
+        with metadata_file.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        # On any I/O or JSON error, fall back to an empty state.
+        return LocalState()
+
+    if not isinstance(raw, Mapping):
+        return LocalState()
+
+    return _decode_state(raw)
+
+
+
+def save_local_state(state: LocalState, path: Optional[Path] = None) -> None:
+    """
+    Save the full local state (folders and per-project metadata) to disk.
+
+    Args:
+        state (LocalState): Full local state to write to disk.
+        path (Optional[Path]): Optional explicit path. If omitted,
+            the default metadata path is used.
+
+    Returns:
+        None
     """
     metadata_file = _metadata_path(path)
 
@@ -184,12 +237,201 @@ def save_local_metadata(
 
     data = {
         "version": 1,
+        "folders": list(state.folders),
         "projects": {
             proj_id: _project_local_to_dict(local)
-            for proj_id, local in metadata.items()
+            for proj_id, local in state.projects.items()
         },
     }
 
     with metadata_file.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, sort_keys=True)
         f.write("\n")
+
+
+def create_folder(folder_path: str, path: Optional[Path] = None) -> LocalState:
+    """Create a new folder path in the local state, if it does not exist.
+
+    This is a convenience helper that:
+
+    * Loads the current LocalState from disk.
+    * Adds ``folder_path`` to the ``folders`` list if it is not already
+      present.
+    * Saves the updated state back to disk.
+
+    It does not modify any project assignments; projects must be moved
+    into the new folder separately.
+
+    Args:
+        folder_path (str): Folder path to create, e.g. ``"CT"`` or
+            ``"Teaching/2025"``.
+        path (Optional[Path]): Optional explicit JSON path. If omitted,
+            the default metadata path is used.
+
+    Returns:
+        LocalState: The updated local state after creation.
+    """
+    state = load_local_state(path)
+    if folder_path and folder_path not in state.folders:
+        state.folders.append(folder_path)
+        state.folders.sort()
+        save_local_state(state, path)
+    return state
+
+
+def rename_folder(old_path: str, new_path: str, path: Optional[Path] = None) -> LocalState:
+    """Rename a folder (and its subtree) in the local state.
+
+    This updates both the explicit ``folders`` list and any project
+    assignments whose folder path lies within the renamed subtree.
+
+    For example, renaming ``"Teaching"`` to ``"Teaching2025"`` will
+    update:
+
+    * folder entries:
+        - ``"Teaching"`` -> ``"Teaching2025"``
+        - ``"Teaching/2025"`` -> ``"Teaching2025/2025"``
+    * project folder assignments:
+        - ``"Teaching"`` -> ``"Teaching2025"``
+        - ``"Teaching/2025"`` -> ``"Teaching2025/2025"``
+
+    Args:
+        old_path (str): Existing folder path to rename.
+        new_path (str): New folder path to assign.
+        path (Optional[Path]): Optional explicit JSON path. If omitted,
+            the default metadata path is used.
+
+    Returns:
+        LocalState: The updated local state after renaming.
+    """
+    if not old_path or old_path == new_path:
+        return load_local_state(path)
+
+    state = load_local_state(path)
+
+    # Update folder list: replace old_path and any descendants whose
+    # paths start with old_path + "/".
+    updated_folders: List[str] = []
+    prefix = old_path + "/"
+    for folder in state.folders:
+        if folder == old_path:
+            updated_folders.append(new_path)
+        elif folder.startswith(prefix):
+            updated_folders.append(new_path + folder[len(old_path) :])
+        else:
+            updated_folders.append(folder)
+    state.folders = sorted({f for f in updated_folders if f})
+
+    # Update project assignments.
+    for proj_local in state.projects.values():
+        f = proj_local.folder
+        if not f:
+            continue
+        if f == old_path:
+            proj_local.folder = new_path
+        elif f.startswith(prefix):
+            proj_local.folder = new_path + f[len(old_path) :]
+
+    save_local_state(state, path)
+    return state
+
+
+def delete_folder(folder_path: str, path: Optional[Path] = None) -> LocalState:
+    """Delete a folder and its subtree from the local state, if empty.
+
+    A folder subtree may be deleted only if there are no projects whose
+    ``ProjectLocal.folder`` lies within that subtree. In particular, if
+    any project has a folder equal to ``folder_path`` or starting with
+    ``folder_path + "/"``, this function will raise a ``ValueError`` and
+    leave the state unchanged.
+
+    When deletion is allowed, this function:
+
+    * Removes ``folder_path`` and any descendant folders from the
+      ``folders`` list.
+    * Leaves all project assignments unchanged (since the subtree is
+      guaranteed to be empty of projects).
+
+    Args:
+        folder_path (str): Folder path to delete (subtree root).
+        path (Optional[Path]): Optional explicit JSON path. If omitted,
+            the default metadata path is used.
+
+    Returns:
+        LocalState: The updated local state after deletion.
+
+    Raises:
+        ValueError: If any project is assigned to a folder within the
+        subtree rooted at ``folder_path``.
+    """
+    if not folder_path:
+        return load_local_state(path)
+
+    state = load_local_state(path)
+
+    # Check for projects in this subtree.
+    prefix = folder_path + "/"
+    for proj_id, proj_local in state.projects.items():
+        f = proj_local.folder or ""
+        if f == folder_path or f.startswith(prefix):
+            raise ValueError(
+                f"Cannot delete folder '{folder_path}': project '{proj_id}' "
+                f"is assigned to folder '{f}'."
+            )
+
+    # Remove the folder and all descendants from the folder list.
+    updated_folders: List[str] = []
+    for folder in state.folders:
+        if folder == folder_path:
+            continue
+        if folder.startswith(prefix):
+            continue
+        updated_folders.append(folder)
+    state.folders = updated_folders
+
+    save_local_state(state, path)
+    return state
+
+
+def load_local_metadata(path: Optional[Path] = None) -> Dict[str, ProjectLocal]:
+    """
+    Load local per-project metadata from the JSON file.
+
+    This is a convenience wrapper around :func:`load_local_state` that
+    returns only the ``projects`` mapping, ignoring the folder list.
+
+    Args:
+        path (Optional[Path]): Optional explicit JSON path.
+
+    Returns:
+        Dict[str, ProjectLocal]: Mapping of project IDs to local metadata.
+    """
+    state = load_local_state(path)
+    return state.projects
+
+
+def save_local_metadata(
+    metadata: Mapping[str, ProjectLocal],
+    path: Optional[Path] = None,
+) -> None:
+    """
+    Save local per-project metadata to the JSON file, preserving folders.
+
+    This is a convenience wrapper around :func:`save_local_state` that
+    updates only the per-project mapping while preserving any existing
+    folder list on disk.
+
+    Args:
+        metadata (Mapping[str, ProjectLocal]): Local metadata to persist.
+        path (Optional[Path]): Optional explicit JSON path.
+
+    Returns:
+        None
+    """
+    # Load existing state so we preserve the folder list.
+    existing = load_local_state(path)
+    new_state = LocalState(
+        folders=list(existing.folders),
+        projects=dict(metadata),
+    )
+    save_local_state(new_state, path)

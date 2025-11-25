@@ -23,6 +23,7 @@ from overleaf_fs.core.models import (
 )
 
 from overleaf_fs.core.metadata_store import load_local_metadata
+from overleaf_fs.core.metadata_store import save_local_metadata
 
 
 def load_project_index() -> ProjectIndex:
@@ -74,3 +75,19 @@ def load_project_index() -> ProjectIndex:
     index[remote3.id] = ProjectRecord(remote=remote3, local=local3)
 
     return index
+
+
+def save_project_index(index: ProjectIndex) -> None:
+    """
+    Persist the local portion of the project index to disk.
+
+    This writes only the local metadata (folder, notes, pinned,
+    hidden) for each project using ``save_local_metadata``.
+    Remote metadata is never written locally.
+
+    This helper is a placeholder for when the GUI modifies local
+    metadata (e.g., when a project is moved to a folder or notes
+    are edited).
+    """
+    local = {proj_id: rec.local for proj_id, rec in index.items()}
+    save_local_metadata(local)

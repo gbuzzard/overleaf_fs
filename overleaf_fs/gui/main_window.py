@@ -1,6 +1,5 @@
 # overleaf_fs/gui/main_window.py
 
-from __future__ import annotations
 
 """
 Main window for the Overleaf Project Explorer GUI.
@@ -11,7 +10,7 @@ In earlier steps we set up:
 
 - A core data model in ``overleaf_fs.core.models`` that separates
   "remote" Overleaf fields (id, name, owner, last modified, URL) from
-  local metadata (tags, notes, pinned, hidden).
+  local metadata (folder, notes, pinned, hidden).
 - A Qt table model in ``overleaf_fs.gui.project_table_model.ProjectTableModel``
   that adapts a ``ProjectIndex`` (mapping project id -> ProjectRecord)
   into a ``QAbstractTableModel`` suitable for a ``QTableView``.
@@ -23,24 +22,34 @@ In earlier steps we set up:
 This module ties those pieces together into a minimal but functional
 main window:
 
-- The central widget is a ``QTableView`` backed by the
-  ``ProjectTableModel`` and wrapped in a ``QSortFilterProxyModel`` to
-  provide column-based sorting and simple text search.
-- On startup, the window loads the dummy project index and displays it.
+- The central area is split vertically using a ``QSplitter``:
+    * Left: a ``ProjectTree`` showing special nodes (All Projects,
+      Pinned) and the virtual folder hierarchy derived from local
+      metadata, rooted at "Home".
+    * Right: a search box and a ``QTableView`` backed by the
+      ``ProjectTableModel`` and wrapped in a
+      ``QSortFilterProxyModel`` to provide column-based sorting and
+      simple text search.
+- On startup, the window loads the dummy project index and displays it,
+  and populates the folder tree from local state.
 - A toolbar and menu bar provide a prominent "Refresh" action (with a
   keyboard shortcut) that re-loads the dummy index. Later, the same
   hook will trigger a real sync/refresh from Overleaf.
-- A search box above the table filters projects by matching the search
-  text against the Name, Owner, and Tags columns.
+- The search box filters projects by matching the search text
+  (case-insensitive) against the Name, Owner, and Notes columns.
+- Selecting nodes in the tree applies an additional folder-based
+  filter (All projects, pinned projects, the Home folder, or a
+  specific folder subtree).
 - Double-clicking a row in the table opens the corresponding Overleaf
   project in the default web browser (using the stored project URL).
 
 The goal at this stage is to have an end-to-end, installable GUI that
 already feels like a simple "project browser" while leaving plenty of
-room to add the tag-based folder tree, real metadata loading, and
+room to add richer folder operations, real metadata loading, and
 Overleaf integration.
 """
 
+from __future__ import annotations
 import sys
 from typing import Optional
 
@@ -55,59 +64,145 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QStatusBar,
     QLineEdit,
+    QSplitter,
+    QInputDialog,
+    QMessageBox,
 )
 
 from overleaf_fs.core.project_index import load_project_index
+from overleaf_fs.core.metadata_store import (
+    load_local_state,
+    create_folder,
+    rename_folder,
+    delete_folder,
+)
 from overleaf_fs.gui.project_table_model import ProjectTableModel
+from overleaf_fs.gui.project_tree import (
+    ProjectTree,
+    ALL_KEY,
+    PINNED_KEY,
+)
 
 
 class _ProjectSortFilterProxyModel(QSortFilterProxyModel):
     """
-    Proxy model that adds sorting and simple text filtering on top of
-    ``ProjectTableModel``.
+    Proxy model that adds sorting and combined text/folder filtering
+    on top of ``ProjectTableModel``.
 
-    The filter matches the search text (case-insensitive) against a
-    subset of columns (currently: Name, Owner, Tags). This keeps the
-    search semantics simple and predictable while still being useful
-    for quickly locating a project.
+    The text filter matches the search text (case-insensitive) against a
+    subset of columns (currently: Name, Owner, Notes). The folder
+    filter restricts rows to those that match the selected node in the
+    project tree (All Projects, Pinned, Home, or a specific folder
+    subtree).
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._filter_text: str = ""
+        # Folder filter key: one of:
+        #   - ALL_KEY (all non-hidden projects),
+        #   - PINNED_KEY (only pinned projects),
+        #   - "" (the Home folder: projects with no folder assigned),
+        #   - a folder path string ("CT", "Teaching/2025").
+        #   - "" (the Home folder: projects with folder in (None, "")),
+        self._folder_key: Optional[str] = ALL_KEY
+
         self.setFilterCaseSensitivity(Qt.CaseInsensitive)
         # We sort by the display role of the source model by default.
         self.setSortCaseSensitivity(Qt.CaseInsensitive)
         self.setDynamicSortFilter(True)
 
+    # ------------------------------------------------------------------
+    # Public API for filters
+    # ------------------------------------------------------------------
     def setFilterText(self, text: str) -> None:
         """
-        Update the filter text and invalidate the filter so that the
+        Update the text filter and invalidate the filter so that the
         attached views update immediately.
+
+        Args:
+            text (str): Case-insensitive substring to match against
+                Name, Owner, and Notes.
         """
         self._filter_text = text.strip()
         self.invalidateFilter()
 
+    def setFolderKey(self, key: Optional[str]) -> None:
+        """
+        Update the folder filter key and invalidate the filter.
+
+        Args:
+            key (Optional[str]): One of:
+                - ALL_KEY (show all projects),
+                - PINNED_KEY (only pinned projects),
+                - "" (Home: projects without an explicit folder),
+                - a folder path string ("CT", "Teaching/2025"),
+                - None (treated like Home / root).
+        """
+        # Treat None from the tree as the Home folder (root).
+        if key is None:
+            self._folder_key = ""
+        else:
+            self._folder_key = key
+        self.invalidateFilter()
+
+    # ------------------------------------------------------------------
+    # QSortFilterProxyModel overrides
+    # ------------------------------------------------------------------
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         """
-        Return True if the row should be visible given the current filter.
-
-        The current implementation checks the Name, Owner, and Tags
-        columns for a substring match of the filter text (case-insensitive).
+        Return True if the row should be visible given the current
+        text and folder filters.
         """
-        if not self._filter_text:
-            return True
-
-        text = self._filter_text.lower()
         model = self.sourceModel()
         if model is None:
             return True
 
-        # Columns we consider for filtering.
+        # We expect the source model to be a ProjectTableModel so we can
+        # access the underlying ProjectRecord for folder/pinned data.
+        from overleaf_fs.gui.project_table_model import ProjectTableModel as _PTM  # local import to avoid cycles
+
+        if not isinstance(model, _PTM):
+            return True
+
+        record = model.project_at(source_row)
+        if record is None:
+            return False
+
+        # 1. Folder-based filter
+        key = self._folder_key
+
+        if key is None or key == ALL_KEY:
+            # All non-hidden projects.
+            folder_ok = not record.local.hidden
+        elif key == PINNED_KEY:
+            # Only pinned, non-hidden projects.
+            folder_ok = record.local.pinned and not record.local.hidden
+        elif key == "":
+            # Home: projects without an explicit folder.
+            folder_ok = (record.local.folder in (None, "")) and not record.local.hidden
+        else:
+            # Regular folder path: match the folder or any of its descendants.
+            folder = record.local.folder or ""
+            folder_ok = (
+                not record.local.hidden
+                and (folder == key or folder.startswith(key + "/"))
+            )
+
+        if not folder_ok:
+            return False
+
+        # 2. Text-based filter
+        if not self._filter_text:
+            return True
+
+        text = self._filter_text.lower()
+
+        # Check Name, Owner, and Notes columns via the source model.
         columns_to_check = [
             ProjectTableModel.COLUMN_NAME,
             ProjectTableModel.COLUMN_OWNER,
-            ProjectTableModel.COLUMN_TAGS,
+            ProjectTableModel.COLUMN_NOTES,
         ]
 
         for col in columns_to_check:
@@ -125,12 +220,12 @@ class MainWindow(QMainWindow):
     """
     Main window for the Overleaf Project Explorer GUI.
 
-    Currently this window contains a search box and a single table of
-    projects backed by ``ProjectTableModel`` and wrapped in a
-    ``QSortFilterProxyModel`` for sorting and filtering. A toolbar and
-    menu bar expose a prominent "Refresh" action. Double-clicking a
-    project row opens the project in the default web browser via its
-    Overleaf URL.
+    The window contains a folder tree on the left and, on the right, a
+    search box and a table of projects backed by ``ProjectTableModel``
+    and wrapped in a ``_ProjectSortFilterProxyModel`` for sorting and
+    filtering. A toolbar and menu bar expose a prominent "Refresh"
+    action. Double-clicking a project row opens the project in the
+    default web browser via its Overleaf URL.
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -155,13 +250,34 @@ class MainWindow(QMainWindow):
         self._search.setPlaceholderText("Search projects…")
         self._search.textChanged.connect(self._proxy.setFilterText)
 
-        # Central layout: search box + table.
-        central = QWidget(self)
-        layout = QVBoxLayout(central)
-        layout.addWidget(self._search)
-        layout.addWidget(self._table)
-        central.setLayout(layout)
-        self.setCentralWidget(central)
+        # Folder tree on the left.
+        self._tree = ProjectTree(self)
+        self._tree.folderSelected.connect(self._on_folder_selected)
+        self._tree.createFolderRequested.connect(self._on_create_folder)
+        self._tree.renameFolderRequested.connect(self._on_rename_folder)
+        self._tree.deleteFolderRequested.connect(self._on_delete_folder)
+
+        # Right-hand panel: search box + table.
+        right = QWidget(self)
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(self._search)
+        right_layout.addWidget(self._table)
+
+        # Left-hand panel: folder tree.
+        left = QWidget(self)
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.addWidget(self._tree)
+
+        # Splitter: tree on the left, table on the right.
+        splitter = QSplitter(self)
+        splitter.addWidget(left)
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+
+        self.setCentralWidget(splitter)
 
         # Toolbar and menu bar with a prominent Refresh action.
         self._refresh_action = self._create_actions()
@@ -174,7 +290,7 @@ class MainWindow(QMainWindow):
         # Initial load of projects (currently from the dummy index).
         self._load_projects()
 
-        self.resize(1000, 600)
+        self.resize(1100, 700)
 
     # ------------------------------------------------------------------
     # UI setup helpers
@@ -203,6 +319,9 @@ class MainWindow(QMainWindow):
         The Refresh action currently re-loads the dummy project index.
         In a later iteration it will trigger a real sync with Overleaf
         and the local metadata store.
+
+        Returns:
+            QAction: The Refresh action.
         """
         refresh_action = QAction("Refresh", self)
         refresh_action.setStatusTip("Reload the project list")
@@ -255,6 +374,17 @@ class MainWindow(QMainWindow):
         index = load_project_index()
         self._model.set_projects(index)
 
+        # Build the folder list for the tree using both explicit folders
+        # from the local state and any folders referenced by projects.
+        state = load_local_state()
+        folder_paths = set(state.folders)
+        for record in index.values():
+            folder = record.local.folder
+            if folder:
+                folder_paths.add(folder)
+
+        self._tree.set_folders(sorted(folder_paths))
+
         status = self.statusBar()
         if status is not None:
             status.showMessage(f"Loaded {len(index)} projects", 3000)
@@ -263,6 +393,170 @@ class MainWindow(QMainWindow):
         """
         Slot connected to the Refresh action (toolbar, menu, shortcut).
         """
+        self._load_projects()
+
+    def _on_folder_selected(self, key: object) -> None:
+        """
+        Slot called when the user selects a node in the project tree.
+
+        Forwards the selection key (All Projects, Pinned, Home, or a
+        specific folder path) to the proxy model's folder filter.
+        """
+        if not isinstance(key, (str, type(None))):
+            return
+        self._proxy.setFolderKey(key)
+
+    def _on_create_folder(self, parent_path: object) -> None:
+        """
+        Slot called when the tree requests creation of a new folder.
+
+        Prompts the user for a folder name, constructs the full folder
+        path (optionally as a subfolder of ``parent_path``), and updates
+        the local metadata via ``create_folder()``. Finally reloads the
+        project index and folder tree.
+        """
+        if not isinstance(parent_path, (str, type(None))):
+            return
+
+        name, ok = QInputDialog.getText(
+            self,
+            "New folder",
+            "Folder name:",
+        )
+        if not ok:
+            return
+
+        folder_name = name.strip()
+        if not folder_name:
+            return
+
+        # For simplicity, disallow "/" in a single folder name segment.
+        if "/" in folder_name:
+            QMessageBox.warning(
+                self,
+                "Invalid folder name",
+                "Folder names cannot contain '/'.\n"
+                "Use the tree to create nested folders.",
+            )
+            return
+
+        if parent_path:
+            folder_path = f"{parent_path}/{folder_name}"
+        else:
+            folder_path = folder_name
+
+        try:
+            create_folder(folder_path)
+        except Exception as exc:  # pragma: no cover - defensive
+            QMessageBox.warning(
+                self,
+                "Error creating folder",
+                f"Could not create folder '{folder_path}':\n{exc}",
+            )
+            return
+
+        # Reload projects and folders so the tree and table reflect the change.
+        self._load_projects()
+
+    def _on_rename_folder(self, folder_path: str) -> None:
+        """
+        Slot called when the tree requests renaming an existing folder.
+
+        Prompts the user for a new name, updates the folder path and any
+        project assignments in the local metadata via ``rename_folder()``,
+        and reloads the project index and folder tree.
+        """
+        if not isinstance(folder_path, str) or not folder_path:
+            return
+
+        # Default to the last segment of the folder path.
+        default_name = folder_path.split("/")[-1]
+
+        name, ok = QInputDialog.getText(
+            self,
+            "Rename folder",
+            f"New name for '{folder_path}':",
+            text=default_name,
+        )
+        if not ok:
+            return
+
+        new_name = name.strip()
+        if not new_name or new_name == default_name:
+            return
+
+        if "/" in new_name:
+            QMessageBox.warning(
+                self,
+                "Invalid folder name",
+                "Folder names cannot contain '/'.\n"
+                "Use the tree to create nested folders.",
+            )
+            return
+
+        # Reconstruct the new full path.
+        if "/" in folder_path:
+            parent = folder_path.rsplit("/", 1)[0]
+            new_path = f"{parent}/{new_name}"
+        else:
+            new_path = new_name
+
+        if new_path == folder_path:
+            return
+
+        try:
+            rename_folder(folder_path, new_path)
+        except Exception as exc:  # pragma: no cover - defensive
+            QMessageBox.warning(
+                self,
+                "Error renaming folder",
+                f"Could not rename folder '{folder_path}' to '{new_path}':\n{exc}",
+            )
+            return
+
+        self._load_projects()
+
+    def _on_delete_folder(self, folder_path: str) -> None:
+        """
+        Slot called when the tree requests deletion of a folder subtree.
+
+        Confirms the deletion with the user, then attempts to delete the
+        folder via ``delete_folder()``. If any projects are still assigned
+        to the folder or its descendants, a message is shown and no changes
+        are made.
+        """
+        if not isinstance(folder_path, str) or not folder_path:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Delete folder",
+            f"Delete folder '{folder_path}' and all of its subfolders?\n\n"
+            "This is only allowed if no projects are assigned to this folder "
+            "or its descendants.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            delete_folder(folder_path)
+        except ValueError as exc:
+            QMessageBox.warning(
+                self,
+                "Cannot delete folder",
+                str(exc),
+            )
+            return
+        except Exception as exc:  # pragma: no cover - defensive
+            QMessageBox.warning(
+                self,
+                "Error deleting folder",
+                f"Could not delete folder '{folder_path}':\n{exc}",
+            )
+            return
+
         self._load_projects()
 
     def _on_table_double_clicked(self, index: QModelIndex) -> None:

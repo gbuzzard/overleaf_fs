@@ -7,21 +7,21 @@ Summary of design:
 - The core data model for projects lives in ``overleaf_fs.core.models`` as
   ``ProjectRecord`` and ``ProjectIndex``, which cleanly separate
   "remote" fields (mirrored from Overleaf: id, name, owner, last
-  modified, URL) from "local" fields (tags, notes, pinned, hidden).
+  modified, URL) from "local" fields (folder, notes, pinned, hidden).
 - This file provides a thin adapter layer between that in-memory
   representation and the Qt view system by implementing a
   ``QAbstractTableModel``. The GUI can attach a ``QTableView`` (and
   optionally a ``QSortFilterProxyModel`` for searching and sorting)
   to this model to present a Finder-like table of Overleaf projects.
 - The table currently exposes four columns: Name, Owner, Last
-  Modified, and Tags. These are enough to make the GUI useful while
+  Modified, and Notes. These are enough to make the GUI useful while
   keeping the model simple. Additional columns can be added later by
   extending ``_COLUMN_DEFINITIONS`` without changing the rest of the
   application.
 - The model is read-only for now: editing of project metadata
-  (e.g. tags, notes) will be handled via dedicated dialogs or other
-  UI elements that update the underlying ``ProjectRecord`` objects
-  and then notify the model to refresh.
+  (e.g. notes, pinned, hidden) will be handled via dedicated dialogs
+  or other UI elements that update the underlying ``ProjectRecord``
+  objects and then notify the model to refresh.
 """
 
 from typing import List, Optional
@@ -38,10 +38,10 @@ class ProjectTableModel(QAbstractTableModel):
     The model is backed by a flat list of ``ProjectRecord`` instances.
     Higher-level code (e.g. the main window or a controller) is
     responsible for constructing a ``ProjectIndex`` from the metadata
-    store and passing it into this model via ``set_projects``.
+    store and passing it into this model via :meth:`set_projects`.
 
     Rows correspond to individual projects; columns correspond to
-    specific fields (name, owner, last modified, tags). The model is
+    specific fields (name, owner, last modified, notes). The model is
     read-only and intended to be combined with a
     ``QSortFilterProxyModel`` for sorting and filtering in the GUI.
     """
@@ -50,13 +50,13 @@ class ProjectTableModel(QAbstractTableModel):
     COLUMN_NAME = 0
     COLUMN_OWNER = 1
     COLUMN_LAST_MODIFIED = 2
-    COLUMN_TAGS = 3
+    COLUMN_NOTES = 3
 
     _COLUMN_DEFINITIONS = [
         (COLUMN_NAME, "Name"),
         (COLUMN_OWNER, "Owner"),
         (COLUMN_LAST_MODIFIED, "Last modified"),
-        (COLUMN_TAGS, "Tags"),
+        (COLUMN_NOTES, "Local notes"),
     ]
 
     def __init__(
@@ -82,6 +82,10 @@ class ProjectTableModel(QAbstractTableModel):
         what Qt expects for a table model. The ordering is not
         guaranteed; a higher-level ``QSortFilterProxyModel`` can
         impose a user-facing sorting when attached to a view.
+
+        Args:
+            project_index (ProjectIndex): Mapping from project id to
+                ProjectRecord.
         """
         records = list(project_index.values())
         self.beginResetModel()
@@ -91,9 +95,18 @@ class ProjectTableModel(QAbstractTableModel):
     def project_at(self, row: int) -> Optional[ProjectRecord]:
         """
         Return the project record at the given row, or ``None`` if the
-        row is out of range. This is useful for controllers or view
-        code that need to act on the underlying ``ProjectRecord`` when
-        a table row is selected or activated.
+        row is out of range.
+
+        This is useful for controllers or view code that need to act on
+        the underlying ``ProjectRecord`` when a table row is selected or
+        activated.
+
+        Args:
+            row (int): Row index in the table.
+
+        Returns:
+            Optional[ProjectRecord]: The project record at the given row,
+            or ``None`` if the row is invalid.
         """
         if 0 <= row < len(self._records):
             return self._records[row]
@@ -133,10 +146,12 @@ class ProjectTableModel(QAbstractTableModel):
                 # Prefer the parsed datetime if available, otherwise
                 # fall back to the raw string.
                 if record.remote.last_modified is not None:
-                    return record.remote.last_modified.isoformat(sep=" ", timespec="seconds")
+                    return record.remote.last_modified.isoformat(
+                        sep=" ", timespec="seconds"
+                    )
                 return record.remote.last_modified_raw or ""
-            if col == self.COLUMN_TAGS:
-                return ", ".join(record.local.tags)
+            if col == self.COLUMN_NOTES:
+                return record.local.notes or ""
 
         if role == Qt.TextAlignmentRole:
             # Left-align text in all columns for now.
@@ -155,6 +170,15 @@ class ProjectTableModel(QAbstractTableModel):
 
         We only customize horizontal headers; vertical headers (row
         numbers) are left to Qt's default implementation.
+
+        Args:
+            section (int): Section index (column or row).
+            orientation (Qt.Orientation): Header orientation.
+            role (int): Data role.
+
+        Returns:
+            Any: Header text for horizontal headers, or the default
+            implementation's result for vertical headers and other roles.
         """
         if role != Qt.DisplayRole:
             return None
@@ -171,10 +195,16 @@ class ProjectTableModel(QAbstractTableModel):
         """
         Items are selectable and enabled but not editable.
 
-        Editing of local metadata (tags, notes, pinned, hidden) can be
+        Editing of local metadata (notes, pinned, hidden) can be
         implemented later by overriding this method and adding the
         ``Qt.ItemIsEditable`` flag for specific columns, together with
         an implementation of ``setData``.
+
+        Args:
+            index (QModelIndex): Index of the item.
+
+        Returns:
+            Qt.ItemFlags: Item flags indicating enabled/selectable state.
         """
         if not index.isValid():
             return Qt.NoItemFlags
