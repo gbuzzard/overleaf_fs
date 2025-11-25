@@ -1,5 +1,5 @@
 #!/bin/bash
-# This script installs overleaf_file from scratch, but there may still be cached packaages.
+# This script installs overleaf_file_system from scratch, but there may still be cached packaages.
 # To do a really clean install, first run
 #  source deep_clean_conda.sh
 
@@ -7,7 +7,7 @@
 # Update the cluster host names, modules, and jax installation as needed, here and in
 # get_demo_data_server.sh
 #####
-NAME="overleaf_file"
+NAME="overleaf_file_system"
 GILBRETH="gilbreth"
 NEGISHI="negishi"
 GAUTSCHI="gautschi"
@@ -90,6 +90,6 @@ reset=`tput sgr0`
 
 echo " "
 echo "Use"
-echo "${red}   conda activate overleaf_file   ${reset}"
+echo "${red}   conda activate overleaf_file_system   ${reset}"
 echo "to activate the conda environment."
 echo " "
