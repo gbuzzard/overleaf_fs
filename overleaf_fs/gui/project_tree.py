@@ -30,9 +30,15 @@ filter accordingly.
 
 from typing import List, Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QModelIndex, QTimer
 from PySide6.QtGui import QStandardItem, QStandardItemModel
-from PySide6.QtWidgets import QTreeView, QMenu, QAbstractItemView
+from PySide6.QtWidgets import (
+    QTreeView,
+    QMenu,
+    QAbstractItemView,
+    QStyleOptionViewItem,
+    QStyle,
+)
 
 
 # Custom role for storing folder paths on tree items.
@@ -85,8 +91,68 @@ class ProjectTree(QTreeView):
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DropOnly)
 
-        # Clicking updates selection.
+        # Index of the folder currently highlighted as a potential drop
+        # target during a drag-and-drop operation. This is used only for
+        # painting and does not affect the actual selection or the
+        # folder filter.
+        self._drop_highlight_index: QModelIndex = QModelIndex()
+
+        # Timer for auto-expanding folders while hovering during a drag.
+        # When the user hovers over a collapsed folder for a short time,
+        # we expand that folder so that subfolders become available as
+        # drop targets.
+        self._expand_timer = QTimer(self)
+        self._expand_timer.setSingleShot(True)
+        self._expand_timer.setInterval(600)  # milliseconds
+        self._expand_timer.timeout.connect(self._on_expand_timer_timeout)
+        self._pending_expand_index: QModelIndex = QModelIndex()
+
+        # Clicking on a tree node updates the current folder selection,
+        # which drives the table's folder filter in the main window.
         self.selectionModel().currentChanged.connect(self._on_current_changed)
+    def _schedule_expand_index(self, index: QModelIndex) -> None:
+        """Schedule auto-expand for the given folder index.
+
+        If the index is invalid, corresponds to a non-folder node, or is
+        already expanded, this cancels any pending expand.
+        """
+        # Only consider valid indices that correspond to folder drop
+        # targets (Home or a real folder path).
+        folder_path = self._folder_path_for_index(index)
+        item = self._model.itemFromIndex(index) if index.isValid() else None
+
+        if (
+            not index.isValid()
+            or folder_path is None
+            or item is None
+            or item.rowCount() == 0
+            or self.isExpanded(index)
+        ):
+            # Nothing to expand or not a real folder node.
+            self._expand_timer.stop()
+            self._pending_expand_index = QModelIndex()
+            return
+
+        if self._pending_expand_index == index and self._expand_timer.isActive():
+            # Already scheduled for this index.
+            return
+
+        self._pending_expand_index = index
+        self._expand_timer.start()
+
+    def _on_expand_timer_timeout(self) -> None:
+        """Expand the folder we have been hovering over during a drag."""
+        if not self._pending_expand_index.isValid():
+            return
+
+        # Double-check that the index is still a valid folder target
+        # before expanding.
+        folder_path = self._folder_path_for_index(self._pending_expand_index)
+        if folder_path is None:
+            return
+
+        self.expand(self._pending_expand_index)
+        self._pending_expand_index = QModelIndex()
 
     # ------------------------------------------------------------------
     # Public API
@@ -117,7 +183,10 @@ class ProjectTree(QTreeView):
         for path in sorted(folder_paths):
             self._insert_folder_path(folders_root, path)
 
-        self.expandAll()
+        # By default expand only the top-level Home container. Nested
+        # folders can be expanded manually or via drag-hover
+        # auto-expand; we avoid expanding every folder on each reload.
+        self.expand(folders_root.index())
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -152,6 +221,16 @@ class ProjectTree(QTreeView):
             if child.text() == label:
                 return child
         return None
+
+    def _set_drop_highlight_index(self, index: QModelIndex) -> None:
+        """Update which row is highlighted as the current drop target.
+
+        An invalid index (``QModelIndex()``) means "no highlight".
+        """
+        if self._drop_highlight_index == index:
+            return
+        self._drop_highlight_index = index
+        self.viewport().update()
 
     def _folder_path_for_index(self, index) -> Optional[str]:
         """
@@ -312,29 +391,68 @@ class ProjectTree(QTreeView):
         """Accept drags that carry project ids and target a folder."""
         mime = event.mimeData()
         if not mime or not mime.hasFormat(PROJECT_IDS_MIME):
+            self._set_drop_highlight_index(QModelIndex())
+            self._schedule_expand_index(QModelIndex())
             event.ignore()
             return
 
-        folder_path = self._folder_path_for_index(self.indexAt(event.pos()))
+        index = self.indexAt(event.pos())
+        if not index.isValid():
+            # If the cursor is just below the last visible row, treat
+            # the last row as the hover target so that the bottom-most
+            # folder can still be expanded and used as a drop target.
+            model = self.model()
+            if model is not None and model.rowCount() > 0:
+                index = model.index(model.rowCount() - 1, 0)
+
+        folder_path = self._folder_path_for_index(index)
         if folder_path is None:
+            self._set_drop_highlight_index(QModelIndex())
+            self._schedule_expand_index(QModelIndex())
             event.ignore()
             return
 
+        # Highlight the potential drop target and schedule auto-expand.
+        self._set_drop_highlight_index(index)
+        self._schedule_expand_index(index)
         event.acceptProposedAction()
 
     def dragMoveEvent(self, event) -> None:
         """Continue to accept drags over valid folder targets."""
         mime = event.mimeData()
         if not mime or not mime.hasFormat(PROJECT_IDS_MIME):
+            self._set_drop_highlight_index(QModelIndex())
+            self._schedule_expand_index(QModelIndex())
             event.ignore()
             return
 
-        folder_path = self._folder_path_for_index(self.indexAt(event.pos()))
+        index = self.indexAt(event.pos())
+        if not index.isValid():
+            # If the cursor is just below the last visible row, treat
+            # the last row as the hover target so that the bottom-most
+            # folder can still be expanded and used as a drop target.
+            model = self.model()
+            if model is not None and model.rowCount() > 0:
+                index = model.index(model.rowCount() - 1, 0)
+
+        folder_path = self._folder_path_for_index(index)
         if folder_path is None:
+            self._set_drop_highlight_index(QModelIndex())
+            self._schedule_expand_index(QModelIndex())
             event.ignore()
             return
 
+        # Keep the highlight on the folder under the cursor and schedule
+        # an auto-expand if we hover here long enough.
+        self._set_drop_highlight_index(index)
+        self._schedule_expand_index(index)
         event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event) -> None:
+        """Clear any drop highlight when the drag leaves the tree."""
+        self._set_drop_highlight_index(QModelIndex())
+        self._schedule_expand_index(QModelIndex())
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:
         """
@@ -345,6 +463,11 @@ class ProjectTree(QTreeView):
         that a controller (e.g. MainWindow) can handle by updating the
         local state via ``metadata_store``.
         """
+        # Clear any visual drop highlight and pending auto-expand now
+        # that the drop is complete.
+        self._set_drop_highlight_index(QModelIndex())
+        self._schedule_expand_index(QModelIndex())
+
         mime = event.mimeData()
         if not mime or not mime.hasFormat(PROJECT_IDS_MIME):
             event.ignore()
@@ -377,3 +500,40 @@ class ProjectTree(QTreeView):
         # they wish to treat None and "" equivalently.
         self.moveProjectsRequested.emit(cleaned_ids, folder_path)
         event.acceptProposedAction()
+
+    def drawRow(self, painter, options, index) -> None:  # type: ignore[override]
+        """Draw rows, adding a highlight for the current drop target.
+
+        The currently selected folder is always drawn using the active
+        (blue) selection color so that it remains visually distinct as
+        the "current folder" even when focus is on the project table.
+
+        The drop target row (if any) is drawn using the inactive
+        selection appearance (typically gray) so that it is visible as a
+        hover target without being confused with the current folder.
+        """
+        opt = QStyleOptionViewItem(options)
+
+        selection_model = self.selectionModel()
+        current_index = selection_model.currentIndex() if selection_model is not None else QModelIndex()
+
+        # Ensure the current folder is painted as an active, focused
+        # selection regardless of whether the tree view itself has
+        # keyboard focus.
+        if current_index.isValid() and index == current_index:
+            opt.state |= QStyle.State_Selected
+            opt.state |= QStyle.State_Active
+            opt.state |= QStyle.State_HasFocus
+
+        # For the drop target highlight, use the selected state but do
+        # not force the active/focus flags. This typically results in a
+        # gray (inactive) selection, visually distinct from the blue
+        # current-folder selection above.
+        if (
+            self._drop_highlight_index.isValid()
+            and index == self._drop_highlight_index
+            and index != current_index
+        ):
+            opt.state |= QStyle.State_Selected
+
+        super().drawRow(painter, opt, index)
