@@ -1,13 +1,18 @@
 """
-Dummy implementation of the project index.
+Project index handling.
 
-This module provides a minimal stub version of the project index so the
-GUI can be tested before we implement actual persistence or Overleaf
-scraping. The real version will load a metadata JSON file, reconcile it
-with Overleaf data, and return a ProjectIndex mapping project IDs to
-ProjectRecord instances.
+This module loads and merges two sources of truth:
 
-For now, ``load_project_index()`` returns a static set of fake projects.
+1. Remote project metadata (owner, modified time, name, URL, etc.)
+   stored in the profile's `overleaf_projects.json` file.
+
+2. Local project metadata (folder, pinned, hidden)
+   stored in the profile's `local_state.json` file.
+
+The function `load_project_index()` returns a `ProjectIndex` mapping
+project IDs to `ProjectRecord` instances containing both parts.
+
+Future versions will add automatic syncing with the Overleaf dashboard.
 """
 
 from __future__ import annotations
@@ -25,69 +30,59 @@ from overleaf_fs.core.models import (
 from overleaf_fs.core.metadata_store import load_local_metadata
 from overleaf_fs.core.metadata_store import save_local_metadata
 
+from overleaf_fs.core.config import get_metadata_path
+import json
+import logging
+
 
 def load_project_index() -> ProjectIndex:
-    """
-    Return a fake ProjectIndex containing a few hard-coded sample projects.
-
-    This is *only* for initial wiring of the GUI. The real implementation
-    will read metadata from disk, merge it with Overleaf dashboard data,
-    and return a dynamic index.
-    """
     index: ProjectIndex = {}
 
+    # Load local metadata (folder, pinned, hidden)
     local_meta = load_local_metadata()
 
-    # Project 1
-    remote1 = ProjectRemote(
-        id="abcdef123456",
-        name="Sample Paper",
-        url="https://www.overleaf.com/project/abcdef123456",
-        owner_label="Owned by you",
-        last_modified_raw="2 days ago",
-        last_modified=datetime(2025, 1, 15, 10, 30),
-    )
-    local1 = local_meta.get(remote1.id, ProjectLocal())
-    index[remote1.id] = ProjectRecord(remote=remote1, local=local1)
+    # Load remote metadata from profile-aware metadata file
+    metadata_path = get_metadata_path()
+    try:
+        raw = metadata_path.read_text(encoding='utf-8')
+        remote_entries = json.loads(raw)
+    except Exception:
+        remote_entries = []
 
-    # Project 2
-    remote2 = ProjectRemote(
-        id="xyz987654321",
-        name="Grant Proposal",
-        url="https://www.overleaf.com/project/xyz987654321",
-        owner_label="Shared",
-        last_modified_raw="5 hours ago",
-        last_modified=datetime(2025, 2, 8, 14, 5),
-    )
-    local2 = local_meta.get(remote2.id, ProjectLocal())
-    index[remote2.id] = ProjectRecord(remote=remote2, local=local2)
+    for entry in remote_entries:
+        try:
+            remote = ProjectRemote(
+                id=entry["id"],
+                name=entry["name"],
+                url=entry["url"],
+                owner_label=entry.get("owner_label", ""),
+                last_modified_raw=entry.get("last_modified_raw", ""),
+                last_modified=datetime.fromisoformat(entry["last_modified"]) if entry.get("last_modified") else None,
+            )
+        except Exception as exc:
+            # Warn about malformed entries rather than silently skipping
+            # them. This may indicate that the profile metadata file is
+            # corrupted or out of sync with Overleaf.
+            logging.warning(
+                "Skipping malformed project entry in %s: %r (error: %s)",
+                metadata_path,
+                entry,
+                exc,
+            )
+            # TODO: Consider offering the user an option to abort, resync
+            # from Overleaf, and retry loading the project index.
+            continue
 
-    # Project 3
-    remote3 = ProjectRemote(
-        id="qqq111222333",
-        name="Teaching Notes",
-        url="https://www.overleaf.com/project/qqq111222333",
-        owner_label="Owned by you",
-        last_modified_raw="1 month ago",
-        last_modified=datetime(2024, 12, 20, 8, 15),
-    )
-    local3 = local_meta.get(remote3.id, ProjectLocal())
-    index[remote3.id] = ProjectRecord(remote=remote3, local=local3)
+        local = local_meta.get(remote.id, ProjectLocal())
+        index[remote.id] = ProjectRecord(remote=remote, local=local)
 
     return index
 
 
 def save_project_index(index: ProjectIndex) -> None:
     """
-    Persist the local portion of the project index to disk.
-
-    This writes only the local metadata (folder, notes, pinned,
-    hidden) for each project using ``save_local_metadata``.
-    Remote metadata is never written locally.
-
-    This helper is a placeholder for when the GUI modifies local
-    metadata (e.g., when a project is moved to a folder or notes
-    are edited).
+    Persist the local portion of the project index to the profile's
+    local_state.json. Remote metadata is never written locally.
     """
     local = {proj_id: rec.local for proj_id, rec in index.items()}
     save_local_metadata(local)

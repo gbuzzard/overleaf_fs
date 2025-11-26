@@ -51,12 +51,14 @@ At this stage the module provides two layers of API:
   wrappers that deal only with the per-project mapping and preserve
   any existing folder list on disk.
 
-By default the metadata file is stored under the user's home directory
-in ``~/.overleaf_fs/overleaf_projects.json``. This keeps the metadata
-separate from any particular project working directory while remaining
-easy to inspect and version-control if desired. The exact path is
-determined by ``overleaf_fs.core.config.get_metadata_path()``, so that
-future multi-profile support can be added without changing callers.
+By default the local-state file is stored inside the active profile's
+state directory. For a fresh installation this is typically
+``~/.overleaf_fs/profiles/primary/local_state.json``. This keeps the
+local metadata separate from any particular project working directory
+while remaining easy to inspect and version-control if desired. The
+exact path is determined by ``overleaf_fs.core.config.get_local_state_path()``,
+so that future multi-profile and shared-directory support can be added
+without changing callers.
 """
 
 from __future__ import annotations
@@ -71,15 +73,14 @@ from overleaf_fs.core import config
 
 
 def _metadata_path(path: Optional[Path] = None) -> Path:
-    """
-    Resolve the path to the metadata JSON file.
+    """Resolve the path to the local metadata JSON file.
 
     If ``path`` is provided, it is returned as-is (converted to a
     ``Path``). Otherwise, the centralized configuration helper
-    ``config.get_metadata_path()`` is used.
+    ``config.get_local_state_path()`` is used.
 
-    Centralizing this logic allows future multi-profile support
-    without modifying callers.
+    Centralizing this logic allows future multi-profile and
+    shared-directory support without modifying callers.
 
     Args:
         path (Optional[Path]): Explicit metadata file path. If provided,
@@ -87,11 +88,12 @@ def _metadata_path(path: Optional[Path] = None) -> Path:
 
     Returns:
         Path: The resolved metadata file path, using
-        ``config.get_metadata_path()`` when no explicit path is given.
+        ``config.get_local_state_path()`` when no explicit path is
+        given.
     """
     if path is not None:
         return Path(path)
-    return config.get_metadata_path()
+    return config.get_local_state_path()
 
 
 def _project_local_to_dict(local: ProjectLocal) -> Dict:
