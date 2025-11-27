@@ -14,15 +14,17 @@ organizational structure stored in ``metadata_store``:
 - Special nodes:
     * All Projects
     * Pinned
+    * Archived (virtual view of archived projects)
 
 - Folder nodes:
     A nested hierarchy defined by the explicit list of folder paths
     stored in the metadata file (e.g. "CT", "Teaching/2025").
 
 Selecting a node emits ``folderSelected`` with one of:
-    "__ALL__"      → show all projects
-    "__PINNED__"   → show locally pinned projects
-    "folder/path"  → a real virtual folder path
+    "__ALL__"        → show all projects
+    "__PINNED__"     → show locally pinned projects
+    "__ARCHIVED__"   → show archived projects (virtual view)
+    "folder/path"    → a real virtual folder path
 
 The MainWindow listens for ``folderSelected`` and updates the proxy
 filter accordingly.
@@ -47,6 +49,7 @@ FolderPathRole = Qt.UserRole + 1
 # Sentinel values for special nodes.
 ALL_KEY = "__ALL__"
 PINNED_KEY = "__PINNED__"
+ARCHIVED_KEY = "__ARCHIVED__"
 
 # MIME type for drags originating from the project table view.
 PROJECT_IDS_MIME = "application/x-overleaf-fs-project-ids"
@@ -172,6 +175,7 @@ class ProjectTree(QTreeView):
         # Special top-level nodes.
         self._add_special_node(root, "All Projects", ALL_KEY)
         self._add_special_node(root, "Pinned", PINNED_KEY)
+        self._add_special_node(root, "Archived", ARCHIVED_KEY)
 
         # Container for actual folders.
         folders_root = QStandardItem("Home")
@@ -239,7 +243,7 @@ class ProjectTree(QTreeView):
         Returns:
             str | None: The folder path string, or "" for the Home node,
             or None if the index does not correspond to a valid folder
-            drop target (e.g. All Projects or Pinned).
+            drop target (e.g. All Projects or Pinned or Archived).
         """
         if not index.isValid():
             return None
@@ -251,7 +255,7 @@ class ProjectTree(QTreeView):
         key = item.data(FolderPathRole)
         text = item.text()
 
-        if key in (ALL_KEY, PINNED_KEY):
+        if key in (ALL_KEY, PINNED_KEY, ARCHIVED_KEY):
             # Not a valid drop target.
             return None
         if key is None and text == "Home":
@@ -270,6 +274,7 @@ class ProjectTree(QTreeView):
             key (Optional[str]): One of:
                 - ALL_KEY,
                 - PINNED_KEY,
+                - ARCHIVED_KEY,
                 - "" or None (Home),
                 - a folder path string.
         """
@@ -284,6 +289,8 @@ class ProjectTree(QTreeView):
                 return item_key == ALL_KEY
             if key == PINNED_KEY:
                 return item_key == PINNED_KEY
+            if key == ARCHIVED_KEY:
+                return item_key == ARCHIVED_KEY
             if key in (None, ""):
                 return item_key is None and text == "Home"
             return isinstance(item_key, str) and item_key == key
@@ -347,7 +354,7 @@ class ProjectTree(QTreeView):
             key = item.data(FolderPathRole)
             text = item.text()
 
-            if key in (ALL_KEY, PINNED_KEY):
+            if key in (ALL_KEY, PINNED_KEY, ARCHIVED_KEY):
                 # Special nodes: no rename/delete, but allow new folder
                 # under the top-level "Home" container.
                 parent_path = None

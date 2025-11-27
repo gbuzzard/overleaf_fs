@@ -1,6 +1,14 @@
 """
 Configuration helpers for the Overleaf Project Explorer.
 
+New requirement
+---------------
+On a clean startup, the application should prompt the user to select the
+profile root directory before loading any state. This allows the user to
+choose a custom location (e.g., a cloud-synced folder) for storing profile
+data. Until the user makes this choice, the profile root directory remains
+unset, and the GUI must handle prompting the user.
+
 Design overview
 ---------------
 This module centralizes decisions about where local configuration and
@@ -57,7 +65,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # ---------------------------------------------------------------------------
 # Paths and constants
@@ -197,12 +205,11 @@ def _ensure_default_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     cfg = dict(raw) if raw is not None else {}
 
     # Determine the root directory where all profile subdirectories
-    # live. For now we default to ``~/.overleaf_fs/profiles``; a future
-    # GUI will allow the user to choose a cloud-synced location.
+    # live. For now we do NOT set a default; leave unset so the GUI can prompt the user.
     profile_root_dir = cfg.get("profile_root_dir")
     if not profile_root_dir:
-        profile_root_dir = str(get_bootstrap_dir() / "profiles")
-        cfg["profile_root_dir"] = profile_root_dir
+        # Leave unset so the GUI can prompt the user on first run.
+        cfg["profile_root_dir"] = None
 
     # Ensure there is at least a single "primary" profile.
     profiles = cfg.get("profiles") or {}
@@ -258,7 +265,12 @@ def get_profile_root_dir() -> Path:
     """
 
     cfg = load_config()
-    return Path(cfg["profile_root_dir"]).expanduser()
+    root = cfg.get("profile_root_dir")
+    if not root:
+        raise RuntimeError(
+            "No profile_root_dir is configured. The GUI must prompt the user to choose a directory."
+        )
+    return Path(root).expanduser()
 
 
 def get_active_profile_id() -> str:
@@ -355,3 +367,18 @@ def get_profile_name() -> str:
     """
 
     return get_active_profile_config().display_name
+
+
+def get_profile_root_dir_optional() -> Optional[Path]:
+    """Return the configured profile root directory or None if unset."""
+    cfg = load_config()
+    root = cfg.get("profile_root_dir")
+    if not root:
+        return None
+    return Path(root).expanduser()
+
+def set_profile_root_dir(path: Path) -> None:
+    """Set the profile_root_dir in config.json to the given path."""
+    cfg = load_config()
+    cfg["profile_root_dir"] = str(path)
+    _save_raw_config(cfg)

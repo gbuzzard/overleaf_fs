@@ -26,21 +26,28 @@ class ProjectRemote:
     #: Full Overleaf URL for this project.
     url: str
 
-    #: Owner label as reported by Overleaf (e.g. "Owned by you",
-    #: "Shared", "Read-only"). This is intentionally a free-form string
-    #: so we are not tightly coupled to Overleaf's exact wording.
+    #: Owner label derived from Overleaf project metadata. At the
+    #: moment this is typically the owner's email address (e.g.
+    #: "user@example.com"), but it is intentionally kept as a
+    #: free-form string so we are not tightly coupled to any
+    #: particular Overleaf wording or field.
     owner_label: Optional[str] = None
 
-    #: Raw "last modified" string as shown by Overleaf, if available.
-    #: Keeping the raw string allows us to display it exactly as the
-    #: site does, even if parsing fails or the format changes.
+    #: Raw "last modified" value as obtained from Overleaf metadata,
+    #: typically an ISO 8601 timestamp string (e.g.
+    #: "2025-11-26T15:48:18.875Z"). Keeping the raw string allows us
+    #: to display or log it even if parsing fails or the format
+    #: changes.
     last_modified_raw: Optional[str] = None
 
     #: Parsed last modified timestamp, if we are able to parse
-    #: ``last_modified_raw`` into a datetime. This is useful for
+    #: ``last_modified_raw`` into a ``datetime``. This is useful for
     #: sorting and advanced filtering. It is optional because parsing
     #: may fail or the value may be missing.
     last_modified: Optional[datetime] = None
+
+    #: Whether Overleaf marks this project as archived.
+    archived: bool = False
 
 
 @dataclass
@@ -79,6 +86,8 @@ class ProjectRecord:
     Overleaf. The ``local`` part is only modified by user actions in
     the GUI or by local configuration, and it should be preserved
     across refreshes.
+
+    The remote part now also includes the ``archived`` boolean field.
     """
 
     remote: ProjectRemote

@@ -57,7 +57,12 @@ def load_project_index() -> ProjectIndex:
                 url=entry["url"],
                 owner_label=entry.get("owner_label", ""),
                 last_modified_raw=entry.get("last_modified_raw", ""),
-                last_modified=datetime.fromisoformat(entry["last_modified"]) if entry.get("last_modified") else None,
+                last_modified=(
+                    datetime.fromisoformat(entry["last_modified"])
+                    if entry.get("last_modified")
+                    else None
+                ),
+                archived=bool(entry.get("archived", False)),
             )
         except Exception as exc:
             # Warn about malformed entries rather than silently skipping

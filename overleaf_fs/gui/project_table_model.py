@@ -18,6 +18,9 @@ Summary of design:
   while keeping the model simple. Additional columns can be added
   later by extending ``_COLUMN_DEFINITIONS`` without changing the rest
   of the application.
+- Archived projects (as indicated by the remote metadata) are
+  displayed using a muted text color to provide a subtle visual cue
+  without changing their names or local folder assignments.
 - The model is read-only for now: editing of project metadata
   (e.g. folder assignment, pinned, hidden) will be handled via
   dedicated dialogs or other UI elements that update the underlying
@@ -27,6 +30,7 @@ Summary of design:
 from typing import List, Optional
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtGui import QColor
 
 from overleaf_fs.core.models import ProjectIndex, ProjectRecord
 
@@ -155,6 +159,12 @@ class ProjectTableModel(QAbstractTableModel):
                 # folder (no explicit folder) as "Home" for readability.
                 folder = record.local.folder
                 return folder if folder not in (None, "") else "Home"
+
+        if role == Qt.ForegroundRole:
+            # Use a muted text color for archived projects to provide a
+            # subtle visual cue while leaving the underlying data unchanged.
+            if getattr(record.remote, "archived", False):
+                return QColor(Qt.darkGray)
 
         if role == Qt.TextAlignmentRole:
             # Left-align text in all columns for now.
