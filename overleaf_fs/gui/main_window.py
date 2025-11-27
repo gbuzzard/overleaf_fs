@@ -550,72 +550,60 @@ class MainWindow(QMainWindow):
         # it clear why any dialogs are appearing.
 
     def initialize_data(self) -> None:
-        """Initialize profile folder, sync from Overleaf, and load data.
+        """Load metadata from disk and perform an initial Overleaf sync.
 
-        This method is intended to be called once, shortly after the
-        main window is shown. It ensures that the profile root
-        directory is configured, performs an initial sync from
-        Overleaf (prompting for a cookie header if needed), and then
-        loads the project index into the GUI.
+        On startup we always load whatever is available on disk so the
+        UI becomes responsive quickly, then we attempt to refresh from
+        Overleaf if a cookie is available.
         """
         self._ensure_profile_root_dir()
+
+        # First, load what we have on disk so the user immediately sees
+        # their existing folder structure and projects (if any).
+        self._on_reload_from_disk()
+
+        # Then, try to perform an initial sync from Overleaf. This may
+        # prompt for login if no valid cookie is available.
         self._initial_sync_from_overleaf()
-        self._load_projects()
 
     def _initial_sync_from_overleaf(self) -> None:
-        """Attempt a one-time sync from Overleaf at startup.
+        """Attempt an initial Overleaf sync for the active profile.
 
-        This is invoked during data initialization so that, on a clean
-        startup, we can:
-
-        * Use any previously saved cookie header to refresh the
-          Overleaf project metadata, or
-        * Prompt the user once for a Cookie header if none is
-          available and no local metadata is present.
-
-        If the user cancels the prompt or if the sync fails, we simply
-        fall back to whatever metadata is already present and allow the
-        user to initiate a manual Refresh later.
+        This is called once on startup after local metadata has been
+        loaded from disk. If a valid cookie is available, it refreshes
+        the remote project list. If no cookie is available or the saved
+        cookie has expired, the user is offered the option to log in via
+        the embedded browser.
         """
         try:
-            # First try with any saved cookie header for the active
-            # profile. If this succeeds, there is nothing else to do.
+            # Try with whatever cookie (if any) is already stored.
             sync_overleaf_projects_for_active_profile()
-            return
         except CookieRequiredError:
-            # No saved cookie is available (or it is no longer valid).
-            # Before prompting the user, check whether we already have
-            # local project metadata. If so, we avoid showing a cookie
-            # prompt on startup and let the user decide when to refresh.
-            try:
-                existing_index = load_project_index()
-            except Exception:
-                existing_index = {}
-
-            if existing_index:
-                # Local metadata exists; skip prompting at startup.
+            # Either no cookie has ever been saved, or the saved cookie
+            # is no longer accepted by Overleaf.
+            if not self._confirm_overleaf_login():
+                # User chose not to log in right now; keep the current
+                # on-disk view.
                 return
 
-            # No local metadata: prompt once for a Cookie header; if the
-            # user cancels, we silently return and let them use the
-            # Refresh action later when they are ready.
             cookie, remember = self._prompt_for_cookie_header()
             if not cookie:
+                # Login dialog was cancelled.
                 return
+
             try:
                 sync_overleaf_projects_for_active_profile(
                     cookie_header=cookie,
                     remember_cookie=remember,
                 )
-            except Exception:
-                # At startup we keep failures quiet; the explicit
-                # Refresh action provides more detailed feedback.
+            except CookieRequiredError:
+                # Even with a freshly obtained cookie, Overleaf rejected
+                # the request. For now we simply leave the local state
+                # as-is; a future sync attempt may succeed.
                 return
-        except Exception:
-            # Any other error during the initial sync is ignored so
-            # that the application can still start and show whatever
-            # local metadata is available.
-            return
+
+        # On success, reload from disk so the UI reflects the new data.
+        self._on_reload_from_disk()
 
     # ------------------------------------------------------------------
     # UI setup helpers
@@ -978,41 +966,27 @@ class MainWindow(QMainWindow):
         self._load_projects()
 
     def _on_sync_with_overleaf(self) -> None:
-        """Synchronize the project list with Overleaf and reload.
-
-        This is the network-backed refresh: it attempts to use any
-        saved cookie header to fetch the latest projects from Overleaf,
-        prompting the user if necessary, and then reloads the local
-        project index so the tree and table reflect the updated
-        metadata.
-        """
-        # First try to sync using any saved cookie header.
+        """Trigger a manual sync with Overleaf for the active profile."""
         try:
             sync_overleaf_projects_for_active_profile()
         except CookieRequiredError:
+            if not self._confirm_overleaf_login():
+                return
+
             cookie, remember = self._prompt_for_cookie_header()
             if not cookie:
                 return
+
             try:
                 sync_overleaf_projects_for_active_profile(
                     cookie_header=cookie,
                     remember_cookie=remember,
                 )
-            except Exception as exc:  # pragma: no cover - defensive
-                QMessageBox.warning(
-                    self,
-                    "Sync failed",
-                    f"Could not refresh projects from Overleaf:\n{exc}",
-                )
+            except CookieRequiredError:
+                # If this still fails, we quietly keep the old state.
                 return
-        except Exception as exc:  # pragma: no cover - defensive
-            QMessageBox.warning(
-                self,
-                "Sync failed",
-                f"Could not refresh projects from Overleaf:\n{exc}",
-            )
-            return
-        self._load_projects()
+
+        self._on_reload_from_disk()
 
     @staticmethod
     def _on_open_overleaf_dashboard() -> None:
@@ -1175,6 +1149,25 @@ class MainWindow(QMainWindow):
     def _on_refresh(self) -> None:
         """Backward-compatible alias for Sync with Overleaf."""
         self._on_sync_with_overleaf()
+
+    def _confirm_overleaf_login(self) -> bool:
+        """Ask the user whether to launch the embedded Overleaf login.
+
+        This is used when a valid Overleaf cookie is missing or has
+        likely expired. If the user declines, the application remains in
+        its current state (using whatever local metadata is available).
+        """
+        reply = QMessageBox.question(
+            self,
+            "Overleaf login required",
+            "A valid Overleaf login for this profile is not available\n"
+            "or may have expired.\n\n"
+            "Do you want to log in through this application now to\n"
+            "load or refresh your Overleaf project information?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        return reply == QMessageBox.Yes
 
     def _prompt_for_cookie_header(self) -> tuple[Optional[str], bool]:
         """

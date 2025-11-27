@@ -410,6 +410,7 @@ def parse_projects_from_html(html: str) -> List[OverleafProjectDTO]:
 
     return projects
 
+
 def scrape_overleaf_projects(session: requests.Session) -> List[OverleafProjectDTO]:
     """Fetch and parse the Overleaf project dashboard for the current user.
 
@@ -512,7 +513,20 @@ def refresh_projects_with_cookie(
         requests.RequestException: If the network request fails.
     """
     session = build_session_from_cookie(cookie_header)
-    projects = scrape_overleaf_projects(session)
+    try:
+        projects = scrape_overleaf_projects(session)
+    except ValueError as exc:
+        # Most parsing failures for the dashboard HTML in practice are
+        # due to the cookie no longer being accepted by Overleaf,
+        # which causes a login form to be returned instead of the
+        # expected project blob. We surface this to the GUI as a
+        # CookieRequiredError so it can prompt the user for a fresh
+        # login or cookie.
+        raise CookieRequiredError(
+            "Overleaf did not return a usable project dashboard for the "
+            "current cookie. The cookie may be expired or invalid."
+        ) from exc
+
     write_overleaf_metadata(projects)
 
     if remember_cookie:
