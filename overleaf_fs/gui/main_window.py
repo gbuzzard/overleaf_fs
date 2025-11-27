@@ -1,53 +1,97 @@
-
-
 """
 Main window for the Overleaf Project Explorer GUI.
 
 Design overview
 ---------------
-In earlier steps we set up:
 
-- A core data model in ``overleaf_fs.core.models`` that separates
-  "remote" Overleaf fields (id, name, owner, last modified, URL) from
-  local metadata (folder, notes, pinned, hidden).
-- A Qt table model in ``overleaf_fs.gui.project_table_model.ProjectTableModel``
-  that adapts a ``ProjectIndex`` (mapping project id -> ProjectRecord)
-  into a ``QAbstractTableModel`` suitable for a ``QTableView``.
-- A dummy ``load_project_index()`` function in
-  ``overleaf_fs.core.project_index`` that currently returns a static
-  set of sample projects so we can wire up and test the GUI before we
-  implement real persistence and Overleaf scraping.
+The main window ties together all core subsystems of OverleafFS:
 
-This module ties those pieces together into a minimal but functional
-main window:
+Profiles and configuration
+--------------------------
+- Each user has a *profile root directory* containing:
+    * overleaf base URL (standard or institution-hosted),
+    * saved Overleaf session cookie (optional),
+    * scraped Overleaf project metadata (JSON),
+    * local metadata (folders, project assignments, expanded-tree state).
+- On first launch, the user is prompted to choose a profile-root directory
+  (ideally in cloud storage to enable multi-machine access).
+- Profiles can be moved to a new directory at any time; existing metadata
+  is migrated seamlessly.
+- The Overleaf base URL is flexible, allowing institutional Overleaf
+  instances (e.g., ORNL) by storing the URL in the profile.
 
-- The central area is split vertically using a ``QSplitter``:
-    * Left: a ``ProjectTree`` showing special nodes (All Projects,
-      Pinned, Archived) and the virtual folder hierarchy derived from
-      local metadata, rooted at "Home".
-    * Right: a search box and a ``QTableView`` backed by the
-      ``ProjectTableModel`` and wrapped in a
-      ``QSortFilterProxyModel`` to provide column-based sorting and
-      simple text search.
-- On startup, the window loads the project index and displays it, and
-  populates the folder tree from local state.
-- A toolbar and menu bar provide a prominent "Refresh" action (with a
-  keyboard shortcut) that triggers a sync/refresh from Overleaf (using
-  a saved cookie when available, or prompting the user for a cookie
-  header if needed) and then reloads the local index.
-- The search box filters projects by matching the search text
-  (case-insensitive) against the Name, Owner, and Local folder
-  columns.
-- Selecting nodes in the tree applies an additional folder-based
-  filter (All projects, pinned projects, the Home folder, or a
-  specific folder).
-- Double-clicking a row in the table opens the corresponding Overleaf
-  project in the default web browser (using the stored project URL).
+Overleaf authentication and scraping
+------------------------------------
+- If Qt WebEngine is available, the application provides an embedded
+  Overleaf login dialog. The user signs in, and OverleafFS captures
+  the resulting session cookie automatically.
+- If WebEngine is unavailable, the user can paste the Cookie header
+  manually as a fallback.
+- The scraper fetches the project list from the Overleaf JSON endpoint
+  (the same data used by Overleaf’s dashboard). Metadata is stored
+  per-profile and used to populate the GUI.
+- A toolbar “Sync with Overleaf” action refreshes metadata using the
+  saved cookie, prompting the user only if necessary.
 
-The goal at this stage is to have an end-to-end, installable GUI that
-already feels like a simple "project browser" while leaving plenty of
-room to add richer folder operations, real metadata loading, and
-Overleaf integration.
+Core model
+----------
+- `ProjectRecord` combines:
+    * remote metadata (id, name, owner, last_modified, archived, URL),
+    * local metadata (folder assignment, pinned, hidden).
+- `ProjectIndex` holds all project records in-memory.
+
+Views and models
+----------------
+- Left panel: `ProjectTree`, a hierarchical tree with:
+    * special nodes: All Projects, Pinned, Archived, Home,
+    * user-created folders with arbitrary nesting,
+    * drag-and-drop support for moving folders and projects.
+  The tree tracks expanded/collapsed state via QSettings and restores it
+  across application restarts.
+- Right panel: a search box + a `QTableView` backed by:
+    * `ProjectTableModel` (source model),
+    * `_ProjectSortFilterProxyModel` (sorting + text & folder filters).
+
+Interaction flow
+----------------
+- Selecting a folder updates the proxy model to display only the projects
+  *directly assigned* to that folder (not descendants), mirroring
+  file-browser semantics.
+- Searching filters by Name, Owner, and Local folder.
+- Double-clicking:
+    * a project row → opens its Overleaf URL,
+    * the “All Projects” tree node → opens the Overleaf dashboard URL,
+      based on the profile’s Overleaf base URL.
+- Dragging:
+    * projects → drop into folders to reassign folder metadata,
+    * folders → reorganize folder hierarchy,
+    * hover-expansion allows dropping into collapsed subfolders.
+
+Toolbar and menus
+-----------------
+Toolbar:
+    - Sync with Overleaf
+    - Reload from disk (local metadata only)
+    - Help
+
+Menus:
+    - File: reload local data, change profile folder
+    - Overleaf: sync, open dashboard
+    - Help: help + about
+
+Startup sequence
+----------------
+1. Show the main window.
+2. Prompt user for profile directory if not yet configured.
+3. Attempt initial sync (with saved cookie if available).
+4. Load project index + folder metadata.
+5. Restore folder expansion state and last selected folder.
+
+Overall
+-------
+This module provides a responsive, intuitive desktop interface for
+browsing, organizing, and synchronizing Overleaf projects, while keeping
+the underlying metadata portable and profile-aware.
 """
 
 from __future__ import annotations
@@ -86,6 +130,7 @@ from overleaf_fs.core.metadata_store import (
 from overleaf_fs.core.config import (
     get_profile_root_dir_optional,
     set_profile_root_dir,
+    get_overleaf_base_url,
 )
 from overleaf_fs.core.overleaf_scraper import (
     sync_overleaf_projects_for_active_profile,
@@ -99,6 +144,7 @@ from overleaf_fs.gui.project_tree import (
     ARCHIVED_KEY,
     FolderPathRole,
 )
+from overleaf_fs.gui.overleaf_login import OverleafLoginDialog, WEBENGINE_AVAILABLE
 
 
 
@@ -504,7 +550,7 @@ class MainWindow(QMainWindow):
         # it clear why any dialogs are appearing.
 
     def initialize_data(self) -> None:
-        """Initialize profile location, sync from Overleaf, and load data.
+        """Initialize profile folder, sync from Overleaf, and load data.
 
         This method is intended to be called once, shortly after the
         main window is shown. It ensures that the profile root
@@ -629,7 +675,7 @@ class MainWindow(QMainWindow):
 
         dialog = QFileDialog(
             self,
-            "Choose OverleafFS profile location",
+            "Choose OverleafFS profile folder",
             default_dir,
         )
         dialog.setFileMode(QFileDialog.Directory)
@@ -745,7 +791,7 @@ class MainWindow(QMainWindow):
 
         * Local/data: "Reload from disk" (no network),
         * Overleaf/network: "Sync with Overleaf" and "Open Overleaf dashboard",
-        * Profile/environment: "Change profile location…",
+        * Profile/environment: "Change profile folder…",
         * Help: "Help" and "About" dialogs.
         """
         # Reload from disk: re-read local metadata without any network
@@ -774,10 +820,10 @@ class MainWindow(QMainWindow):
         self._open_dashboard_action.setToolTip("Open the Overleaf projects page in your browser")
         self._open_dashboard_action.triggered.connect(self._on_open_overleaf_dashboard)
 
-        # Change profile location: allow the user to move the profile
+        # Change profile folder: allow the user to move the profile
         # metadata directory to a new folder (e.g. a different
         # cloud-synced location).
-        self._change_profile_location_action = QAction("Change profile location…", self)
+        self._change_profile_location_action = QAction("Change profile folder…", self)
         # self._change_profile_location_action.setStatusTip("Choose a new directory for OverleafFS profiles")
         self._change_profile_location_action.setToolTip("Choose a new directory for OverleafFS profiles")
         self._change_profile_location_action.triggered.connect(self._on_change_profile_location)
@@ -823,7 +869,7 @@ class MainWindow(QMainWindow):
         """
         menubar = self.menuBar()
 
-        # File menu: local reload and profile location.
+        # File menu: local reload and profile folder.
         file_menu = menubar.addMenu("&File")
         file_menu.addAction(self._reload_action)
         file_menu.addSeparator()
@@ -968,9 +1014,18 @@ class MainWindow(QMainWindow):
             return
         self._load_projects()
 
-    def _on_open_overleaf_dashboard(self) -> None:
-        """Open the Overleaf projects dashboard in the default browser."""
-        overleaf_projects_url = QUrl("https://www.overleaf.com/project")
+    @staticmethod
+    def _on_open_overleaf_dashboard() -> None:
+        """Open the Overleaf projects dashboard in the default browser.
+
+        The URL is derived from the active profile's Overleaf base URL
+        so that institution-hosted Overleaf instances (e.g. ORNL) are
+        supported transparently.
+        """
+        base = get_overleaf_base_url().strip().rstrip("/")
+        if not base:
+            base = "https://www.overleaf.com"
+        overleaf_projects_url = QUrl(f"{base}/project")
         QDesktopServices.openUrl(overleaf_projects_url)
 
     def _on_change_profile_location(self) -> None:
@@ -997,7 +1052,7 @@ class MainWindow(QMainWindow):
 
         dialog = QFileDialog(
             self,
-            "Choose OverleafFS profile location",
+            "Choose OverleafFS profile folder",
             default_dir,
         )
         dialog.setFileMode(QFileDialog.Directory)
@@ -1123,7 +1178,14 @@ class MainWindow(QMainWindow):
 
     def _prompt_for_cookie_header(self) -> tuple[Optional[str], bool]:
         """
-        Prompt the user for an Overleaf Cookie header string.
+        Obtain an Overleaf Cookie header string for the active profile.
+
+        When Qt WebEngine is available, this first presents an embedded
+        Overleaf login dialog so that the user can sign in inside the
+        application and have the session cookies captured
+        automatically. If WebEngine is not available (or in
+        environments where it is not installed), the method falls back
+        to a manual "paste Cookie header" dialog.
 
         Returns:
             A tuple ``(cookie_header, remember)`` where ``cookie_header``
@@ -1131,13 +1193,44 @@ class MainWindow(QMainWindow):
             cancelled) and ``remember`` indicates whether the user
             agreed to remember this cookie for future refreshes.
         """
-        # Use a multi-line text dialog for convenience; cookie headers
-        # can be long and may wrap in the browser's developer tools.
+        # Preferred path: embedded login via Qt WebEngine, when
+        # available. This lets the user log in to Overleaf in a small
+        # browser window without having to copy/paste anything from
+        # their regular browser.
+        if WEBENGINE_AVAILABLE:
+            dlg = OverleafLoginDialog(self)
+            cookie_header = dlg.exec_login()
+            if not cookie_header:
+                # Treat cancellation of the embedded login dialog as a
+                # user cancel for the sync operation; do not fall back
+                # to manual paste in this case.
+                return None, False
+
+            # Ask whether to remember the cookie for future refreshes.
+            reply = QMessageBox.question(
+                self,
+                "Remember cookie?",
+                "Remember this Cookie header for future refreshes?\n\n"
+                "You can always clear or replace it later by providing a\n"
+                "new header the next time you are prompted.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            remember = reply == QMessageBox.Yes
+            return cookie_header, remember
+
+        # Fallback: manual cookie paste when Qt WebEngine is not
+        # available in the environment. In this mode, the user logs in
+        # to Overleaf in their regular browser and copies the Cookie
+        # header from the browser's developer tools.
         text, ok = QInputDialog.getMultiLineText(
             self,
             "Overleaf Cookie Header",
-            "Paste your Overleaf Cookie header from the browser:\n\n"
-            "Instructions:\n"
+            "Qt WebEngine is not available in this environment, so the\n"
+            "embedded Overleaf login dialog cannot be used.\n\n"
+            "Instead, please log in to Overleaf in your browser and\n"
+            "paste the Cookie header for a request to the project\n"
+            "dashboard:\n\n"
             "  1. Open the Overleaf projects page in your browser.\n"
             "  2. Use the browser's developer tools to inspect a request\n"
             "     to the project dashboard.\n"
@@ -1151,7 +1244,6 @@ class MainWindow(QMainWindow):
         if not cookie:
             return None, False
 
-        # Ask whether to remember the cookie for future refreshes.
         reply = QMessageBox.question(
             self,
             "Remember cookie?",
@@ -1386,8 +1478,12 @@ class MainWindow(QMainWindow):
 
         # Open the main Overleaf projects page. This URL mirrors the
         # dashboard that lists all projects in the user's Overleaf
-        # account.
-        overleaf_projects_url = QUrl("https://www.overleaf.com/project")
+        # account and is derived from the active profile's Overleaf
+        # base URL.
+        base = get_overleaf_base_url().strip().rstrip("/")
+        if not base:
+            base = "https://www.overleaf.com"
+        overleaf_projects_url = QUrl(f"{base}/project")
         QDesktopServices.openUrl(overleaf_projects_url)
 
     def _on_table_double_clicked(self, index: QModelIndex) -> None:

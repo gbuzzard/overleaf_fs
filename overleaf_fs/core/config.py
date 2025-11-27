@@ -90,6 +90,11 @@ DEFAULT_PROFILE_DISPLAY_NAME = "Primary"
 DEFAULT_METADATA_FILENAME = "overleaf_projects.json"
 DEFAULT_LOCAL_STATE_FILENAME = "local_state.json"
 
+# Default base URL for the Overleaf server used by a profile. This can
+# be overridden per profile (for example, to support institution-hosted
+# Overleaf instances such as an ORNL deployment).
+DEFAULT_OVERLEAF_BASE_URL = "https://www.overleaf.com"
+
 
 @dataclass
 class ProfileConfig:
@@ -104,11 +109,14 @@ class ProfileConfig:
         display_name: Human-readable name (e.g. "Primary", "ORNL").
         relative_path: Subdirectory name under the profile root
             directory where this profile's state files live.
+        overleaf_base_url: Base URL for the Overleaf server associated
+            with this profile (e.g. "https://www.overleaf.com").
     """
 
     profile_id: str
     display_name: str
     relative_path: str
+    overleaf_base_url: str
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +225,16 @@ def _ensure_default_config(raw: Dict[str, Any]) -> Dict[str, Any]:
         profiles[DEFAULT_PROFILE_ID] = {
             "display_name": DEFAULT_PROFILE_DISPLAY_NAME,
             "relative_path": DEFAULT_PROFILE_ID,
+            "overleaf_base_url": DEFAULT_OVERLEAF_BASE_URL,
         }
+
+    # Ensure all profiles have an Overleaf base URL configured so that
+    # institution-specific Overleaf instances (e.g. ORNL) can be
+    # associated with their own profiles.
+    for pid, pdata in profiles.items():
+        if "overleaf_base_url" not in pdata or not pdata["overleaf_base_url"]:
+            pdata["overleaf_base_url"] = DEFAULT_OVERLEAF_BASE_URL
+
     cfg["profiles"] = profiles
 
     # Ensure the active profile id is set and points to a known profile.
@@ -298,11 +315,13 @@ def get_active_profile_config() -> ProfileConfig:
 
     display_name = pdata.get("display_name") or DEFAULT_PROFILE_DISPLAY_NAME
     relative_path = pdata.get("relative_path") or profile_id
+    overleaf_base_url = pdata.get("overleaf_base_url") or DEFAULT_OVERLEAF_BASE_URL
 
     return ProfileConfig(
         profile_id=profile_id,
         display_name=display_name,
         relative_path=relative_path,
+        overleaf_base_url=overleaf_base_url,
     )
 
 
@@ -377,8 +396,38 @@ def get_profile_root_dir_optional() -> Optional[Path]:
         return None
     return Path(root).expanduser()
 
+
 def set_profile_root_dir(path: Path) -> None:
     """Set the profile_root_dir in config.json to the given path."""
     cfg = load_config()
     cfg["profile_root_dir"] = str(path)
+    _save_raw_config(cfg)
+
+
+def get_overleaf_base_url() -> str:
+    """Return the Overleaf base URL for the active profile.
+
+    This value is used by the scraper and embedded login dialog to
+    determine which Overleaf server to talk to (for example,
+    "https://www.overleaf.com" for the public service or an
+    institution-hosted instance).
+    """
+    return get_active_profile_config().overleaf_base_url
+
+
+def set_overleaf_base_url(url: str) -> None:
+    """Set the Overleaf base URL for the active profile.
+
+    Args:
+        url: Base URL for the Overleaf server associated with the
+            active profile. This should include the scheme, e.g.
+            "https://www.overleaf.com".
+    """
+    cfg = load_config()
+    profiles = cfg.get("profiles") or {}
+    profile_id = cfg.get("active_profile") or DEFAULT_PROFILE_ID
+    pdata = profiles.get(profile_id) or {}
+    pdata["overleaf_base_url"] = url
+    profiles[profile_id] = pdata
+    cfg["profiles"] = profiles
     _save_raw_config(cfg)

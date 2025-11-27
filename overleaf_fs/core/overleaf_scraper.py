@@ -3,33 +3,45 @@ Helpers for synchronizing the local project index with Overleaf.
 
 This module implements a minimal HTML-scraping workflow for refreshing
 the profile's ``overleaf_projects.json`` from the Overleaf project
-dashboard. Authentication is based on a browser-derived cookie header:
+dashboard. It is built around two key ideas:
 
-1. The user visits https://www.overleaf.com in their normal browser,
-   logs in, and uses the browser's developer tools to copy the
-   ``Cookie`` header used for a request to the project dashboard.
+* Each profile is associated with an Overleaf **base URL** (for
+  example, ``https://www.overleaf.com`` for the public service or an
+  institution-hosted deployment such as an ORNL instance). All
+  scraping and project URLs are derived from this base URL.
+* Authentication uses a browser-style session cookie (typically the
+  ``overleaf_session2`` cookie) so that we can reuse the same login
+  state as the user's normal browser.
 
-2. The user pastes that header into the Overleaf FS GUI, which calls
-   the functions in this module to build an authenticated HTTP session
-   and scrape the project list.
+There are two ways for GUI code to obtain the cookie header used by the
+functions in this module:
 
-To avoid forcing the user to paste the cookie on every sync, we support
-optionally storing the cookie header in a small JSON file under the
-active profile's state directory. This file contains only the raw cookie
+1. **Embedded login dialog (preferred when Qt WebEngine is available).**
+   The GUI presents a small browser window pointed at the configured
+   Overleaf base URL. The user logs in as usual, and the application
+   reads the session cookies from the embedded browser's cookie store to
+   construct a ``Cookie`` header string.
+2. **Manual cookie paste (fallback).** The user logs into Overleaf in
+   their normal browser, uses the browser's developer tools to copy the
+   ``Cookie`` header for a request to the project dashboard, and pastes
+   that header into the GUI.
+
+To avoid forcing the user to supply the cookie on every sync, we
+optionally store the raw Cookie header in a small JSON file under the
+active profile's state directory. This file contains only the cookie
 header and a timestamp. The GUI is responsible for asking the user
 whether they consent to saving the cookie locally.
 
-IMPORTANT: The actual HTML structure of the Overleaf dashboard may
-change over time. The parsing logic in this module is written to be
-defensive and should fail loudly with a clear error if it cannot find
-any projects, rather than silently writing an empty metadata file.
+The current Overleaf dashboard exposes the project list via a JSON blob
+embedded in a ``<meta>`` tag (``name="ol-prefetchedProjectsBlob"``). We
+parse that blob rather than scraping visual table markup. The parsing
+logic is intentionally defensive: if it cannot find any projects, it
+raises a clear error instead of silently writing an empty metadata
+file.
 
-Future enhancements may include:
-
-* Using a more direct JSON API if Overleaf exposes one for the dashboard.
-* Integrating an embedded browser or Playwright-based login flow to
-  obtain cookies automatically, instead of asking the user to copy
-  them manually.
+Future enhancements may include using a more direct JSON API if Overleaf
+exposes one for the dashboard or adding richer diagnostics around
+cookie expiry and login failures.
 """
 
 
@@ -42,18 +54,46 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup  # type: ignore[import]
 
 from overleaf_fs.core import config
-from overleaf_fs.core.config import get_metadata_path
+from overleaf_fs.core.config import get_metadata_path, get_overleaf_base_url
 
 
 LOGGER = logging.getLogger(__name__)
 
-OVERLEAF_BASE_URL = "https://www.overleaf.com"
 DASHBOARD_PATH = "/project"
+
+def _get_overleaf_base_url() -> str:
+    """Return the normalized Overleaf base URL for the active profile.
+
+    The base URL is obtained from the profile configuration via
+    :func:`get_overleaf_base_url` and normalized by stripping any
+    trailing slash. This allows institution-hosted Overleaf instances
+    (for example an ORNL deployment) to be used transparently.
+    """
+    base = get_overleaf_base_url().strip()
+    if not base:
+        # Fallback to the default if the config is empty for any reason.
+        base = "https://www.overleaf.com"
+    # Normalize by removing any trailing slash.
+    return base.rstrip("/")
+
+
+def _get_overleaf_host() -> str:
+    """Return the hostname component of the Overleaf base URL.
+
+    This is used when attaching cookies to a requests.Session so that
+    the cookie domain matches the configured Overleaf server for the
+    active profile.
+    """
+    base = _get_overleaf_base_url()
+    parsed = urlparse(base)
+    host = parsed.hostname or "www.overleaf.com"
+    return host
 
 # Name of the JSON file where we optionally store a browser-derived
 # cookie header for the active profile.
@@ -195,14 +235,17 @@ def build_session_from_cookie(cookie_header: str) -> requests.Session:
     )
 
     # Parse the cookie header into individual cookies. We set them for
-    # the .overleaf.com domain so that requests to the dashboard carry
-    # the same cookies as the browser.
+    # the configured Overleaf host (e.g. "www.overleaf.com" or an
+    # institution-hosted instance) so that requests to the dashboard
+    # carry the same cookies as the browser.
+    host = _get_overleaf_host()
+    cookie_domain = f".{host.lstrip('.')}"
     for part in cookie_header.split(";"):
         part = part.strip()
         if not part or "=" not in part:
             continue
         name, value = part.split("=", 1)
-        session.cookies.set(name.strip(), value.strip(), domain=".overleaf.com")
+        session.cookies.set(name.strip(), value.strip(), domain=cookie_domain)
 
     return session
 
@@ -311,8 +354,10 @@ def parse_projects_from_html(html: str) -> List[OverleafProjectDTO]:
             if not project_id or not name:
                 continue
 
-            # Construct the project URL from the id.
-            url = f"{OVERLEAF_BASE_URL}/project/{project_id}"
+            # Construct the project URL from the id and the configured
+            # Overleaf base URL for this profile.
+            base_url = _get_overleaf_base_url()
+            url = f"{base_url}/project/{project_id}"
 
             owner = entry.get("owner") or {}
             owner_email = owner.get("email") or ""
@@ -379,7 +424,8 @@ def scrape_overleaf_projects(session: requests.Session) -> List[OverleafProjectD
         ValueError: If the response looks like a login page or does not
         contain any recognizable project entries.
     """
-    url = OVERLEAF_BASE_URL + DASHBOARD_PATH
+    base_url = _get_overleaf_base_url()
+    url = f"{base_url}{DASHBOARD_PATH}"
     LOGGER.info("Fetching Overleaf dashboard from %s", url)
     resp = session.get(url, timeout=15)
     resp.raise_for_status()
