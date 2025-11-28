@@ -135,7 +135,7 @@ from overleaf_fs.core.config import (
     get_profile_root_dir_optional,
     set_profile_root_dir,
     get_overleaf_base_url,
-    get_active_profile_state_dir,
+    get_active_profile_data_dir,
 )
 from overleaf_fs.core.overleaf_scraper import (
     sync_overleaf_projects_for_active_profile,
@@ -796,7 +796,7 @@ class MainWindow(QMainWindow):
             # Look in the active profile's data directory, which is
             # where local_state.json (directory-structure data) and
             # overleaf_projects.json (cached projects info) live.
-            state_dir = get_active_profile_state_dir()
+            state_dir = get_active_profile_data_dir()
         except RuntimeError:
             # No active profile configured yet; nothing to check.
             return False

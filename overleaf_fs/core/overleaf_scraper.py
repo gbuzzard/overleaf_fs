@@ -156,7 +156,7 @@ def _get_cookie_path() -> Path:
     Returns:
         Path to the cookie file in the active profile's data directory.
     """
-    state_dir = config.get_active_profile_state_dir()
+    state_dir = config.get_active_profile_data_dir()
     return state_dir / COOKIE_FILENAME
 
 

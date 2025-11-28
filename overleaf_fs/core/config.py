@@ -41,11 +41,11 @@ A typical layout might look like::
 
     /path/to/profile_root_dir/
         primary/
-            overleaf_projects.json
-            local_state.json
+            overleaf_projects_info.json
+            local_directory_structure.json
         ornl/
-            overleaf_projects.json
-            local_state.json
+            overleaf_projects_info.json
+            local_directory_structure.json
 
 where ``/path/to/profile_root_dir`` is either a local directory or a
 cloud-synced directory (e.g. on Dropbox or iCloud) chosen by the
@@ -86,11 +86,14 @@ DEFAULT_PROFILE_ID = "primary"
 DEFAULT_PROFILE_DISPLAY_NAME = "Primary"
 
 # Default names for the per-profile data files. These live inside the
-# profile's own directory (see ``get_active_profile_state_dir``).
-# - DEFAULT_METADATA_FILENAME: cached Overleaf projects info for this profile.
-# - DEFAULT_LOCAL_STATE_FILENAME: local-only directory structure and related flags.
-DEFAULT_METADATA_FILENAME = "overleaf_projects.json"
-DEFAULT_LOCAL_STATE_FILENAME = "local_state.json"
+# profile's own directory (see ``get_active_profile_data_dir``).
+# - DEFAULT_PROJECTS_INFO_FILENAME: cached Overleaf projects info for this profile.
+#   This is the "projects-info JSON file" (``overleaf_projects_info.json``).
+# - DEFAULT_DIRECTORY_STRUCTURE_FILENAME: local-only directory structure and
+#   related flags. This is the "directory-structure JSON file"
+#   (``local_directory_structure.json``).
+DEFAULT_PROJECTS_INFO_FILENAME = "overleaf_projects_info.json"
+DEFAULT_DIRECTORY_STRUCTURE_FILENAME = "local_directory_structure.json"
 
 # Default base URL for the Overleaf server used by a profile. This can
 # be overridden per profile (for example, to support institution-hosted
@@ -328,7 +331,7 @@ def get_active_profile_config() -> ProfileConfig:
     )
 
 
-def get_active_profile_state_dir() -> Path:
+def get_active_profile_data_dir() -> Path:
     """Return the directory where the active profile's data files live.
 
     This directory typically contains the Overleaf projects info JSON
@@ -347,11 +350,11 @@ def get_active_profile_state_dir() -> Path:
 
 
 def get_projects_info_path() -> Path:
-    """Return the full path to the Overleaf projects info JSON file.
+    """Return the full path to the projects-info JSON file.
 
     For the active profile this is typically something like::
 
-        get_active_profile_state_dir() / "overleaf_projects.json"
+        get_active_profile_data_dir() / "overleaf_projects_info.json"
 
     This file holds the cached list of Overleaf projects and related
     info for the profile (id, title, timestamps, etc.).
@@ -361,10 +364,11 @@ def get_projects_info_path() -> Path:
     not require updates elsewhere.
 
     Returns:
-        Path to the overleaf project info JSON file for the active profile.
+        Path to the projects-info JSON file (``overleaf_projects_info.json``)
+        for the active profile.
     """
 
-    return get_active_profile_state_dir() / DEFAULT_METADATA_FILENAME
+    return get_active_profile_data_dir() / DEFAULT_PROJECTS_INFO_FILENAME
 
 
 def get_directory_structure_path() -> Path:
@@ -376,10 +380,11 @@ def get_directory_structure_path() -> Path:
     across the codebase.
 
     Returns:
-        Path to the local directory structure JSON file for the active profile.
+        Path to the directory-structure JSON file
+        (``local_directory_structure.json``) for the active profile.
     """
 
-    return get_active_profile_state_dir() / DEFAULT_LOCAL_STATE_FILENAME
+    return get_active_profile_data_dir() / DEFAULT_DIRECTORY_STRUCTURE_FILENAME
 
 
 def get_profile_name() -> str:

@@ -16,7 +16,7 @@ This is **not** an automated test. It is a developer sanity check.
 import shutil
 from pathlib import Path
 
-from overleaf_fs.core.config import get_active_profile_state_dir
+from overleaf_fs.core.config import get_active_profile_data_dir
 
 from PySide6.QtWidgets import QApplication
 from overleaf_fs.gui.main_window import MainWindow
@@ -30,7 +30,7 @@ def main():
     # Try to infer the active profile's data directory (the directory
     # that actually contains local_state.json and overleaf_projects.json).
     try:
-        default_dir = get_active_profile_state_dir()
+        default_dir = get_active_profile_data_dir()
     except RuntimeError:
         default_dir = None
 
