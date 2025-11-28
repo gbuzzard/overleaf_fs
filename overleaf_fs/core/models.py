@@ -26,14 +26,14 @@ class ProjectRemote:
     #: Full Overleaf URL for this project.
     url: str
 
-    #: Owner label derived from Overleaf project metadata. At the
+    #: Owner label derived from Overleaf project info. At the
     #: moment this is typically the owner's email address (e.g.
     #: "user@example.com"), but it is intentionally kept as a
     #: free-form string so we are not tightly coupled to any
     #: particular Overleaf wording or field.
     owner_label: Optional[str] = None
 
-    #: Raw "last modified" value as obtained from Overleaf metadata,
+    #: Raw "last modified" value as obtained from Overleaf project info,
     #: typically an ISO 8601 timestamp string (e.g.
     #: "2025-11-26T15:48:18.875Z"). Keeping the raw string allows us
     #: to display or log it even if parsing fails or the format
@@ -53,14 +53,15 @@ class ProjectRemote:
 @dataclass
 class ProjectLocal:
     """
-    Local-only metadata used by the Overleaf File System.
+    Local-only directory-structure fields used by the Overleaf File System.
 
     These fields are never pushed back to Overleaf; they represent how
-    you choose to organize and annotate projects on your own machine.
+    you choose to organize and annotate projects on your own machine
+    (folder, notes, pinned/hidden flags).
     """
-    # Folder path in the virtual project tree, or None/"" for
-    # the Home folder (root). Examples: "CT", "Teaching/2025" map to
-    # "Home/CT" and "Home/Teaching/2025"
+    # Folder path in the virtual project tree, or None/"" for the Home
+    # folder (root). Examples: "CT" and "Teaching/2025" map to
+    # "Home/CT" and "Home/Teaching/2025".
     folder: Optional[str] = None
 
     #: Optional free-form notes about the project (e.g. status,
@@ -79,15 +80,17 @@ class ProjectLocal:
 @dataclass
 class ProjectRecord:
     """
-    Full record for a single Overleaf project, combining remote and
-    local metadata.
+    Full record for a single Overleaf project, combining remote projects
+    info and local directory-structure fields.
 
-    The ``remote`` part is overwritten whenever we refresh from
-    Overleaf. The ``local`` part is only modified by user actions in
-    the GUI or by local configuration, and it should be preserved
-    across refreshes.
+    The ``remote`` part mirrors what Overleaf reports and is overwritten
+    whenever we refresh from Overleaf. The ``local`` part contains only
+    local directory-structure fields (folder/notes/pinned/hidden) and is
+    modified only by user actions in the GUI or by local configuration;
+    it should be preserved across refreshes.
 
-    The remote part now also includes the ``archived`` boolean field.
+    The remote part also includes the ``archived`` boolean field, which
+    reflects whether Overleaf marks the project as archived.
     """
 
     remote: ProjectRemote
