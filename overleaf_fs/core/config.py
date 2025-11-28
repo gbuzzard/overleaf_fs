@@ -11,13 +11,13 @@ unset, and the GUI must handle prompting the user.
 
 Design overview
 ---------------
-This module centralizes decisions about where local configuration and
-metadata are stored on disk, and it lays the groundwork for supporting
-multiple Overleaf accounts ("profiles") in the future.
+This module centralizes decisions about where overleaf project info and
+local directory structure are stored on disk, and it lays the groundwork
+for supporting multiple Overleaf accounts ("profiles") in the future.
 
-Local metadata
-~~~~~~~~~~~~~~
-By default, the metadata files are stored under a per-user
+Local overleaf project info and directory structure
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+By default, the local data files are stored under a per-user
 "bootstrap" directory, following a pattern similar to tools like
 conda (``~/.conda``). For this application we use
 
@@ -29,11 +29,11 @@ actual profile state directories live and which profile is currently
 active.
 
 Each profile represents a local view of one Overleaf account (or
-usage context) and has its own directory containing state such as:
+usage context) and has its own directory containing data files such as:
 
 - the cached list of Overleaf projects for that profile, and
-- the local-only metadata for those projects (folders, pinned,
-  hidden, etc.).
+- the local-only directory structure for those projects (folders,
+  pinned, hidden, etc.).
 
 A typical layout might look like::
 
@@ -85,8 +85,10 @@ CONFIG_FILENAME = "config.json"
 DEFAULT_PROFILE_ID = "primary"
 DEFAULT_PROFILE_DISPLAY_NAME = "Primary"
 
-# Default names for the per-profile state files. These live inside the
-# profile's own state directory (see ``get_active_profile_state_dir``).
+# Default names for the per-profile data files. These live inside the
+# profile's own directory (see ``get_active_profile_state_dir``).
+# - DEFAULT_METADATA_FILENAME: cached Overleaf projects info for this profile.
+# - DEFAULT_LOCAL_STATE_FILENAME: local-only directory structure and related flags.
 DEFAULT_METADATA_FILENAME = "overleaf_projects.json"
 DEFAULT_LOCAL_STATE_FILENAME = "local_state.json"
 
@@ -129,8 +131,8 @@ def get_bootstrap_dir() -> Path:
 
     This directory is always local to the current machine (typically
     ``~/.overleaf_fs``) and is used to store lightweight configuration
-    files such as ``config.json``. The actual profile state (project
-    metadata, local folders, etc.) may live in a different directory
+    files such as ``config.json``. The actual profile state (overleaf project
+    info, local directory structure, etc.) may live in a different directory
     chosen by the user, for example inside a cloud-synced folder.
 
     Returns:
@@ -212,8 +214,9 @@ def _ensure_default_config(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     cfg = dict(raw) if raw is not None else {}
 
-    # Determine the root directory where all profile subdirectories
-    # live. For now we do NOT set a default; leave unset so the GUI can prompt the user.
+    # Determine the root directory under which all profile data
+    # directories live. For now we do NOT set a default; leave this
+    # unset so the GUI can prompt the user on first run.
     profile_root_dir = cfg.get("profile_root_dir")
     if not profile_root_dir:
         # Leave unset so the GUI can prompt the user on first run.
@@ -271,7 +274,7 @@ def load_config() -> Dict[str, Any]:
 
 
 def get_profile_root_dir() -> Path:
-    """Return the directory under which all profile state lives.
+    """Return the directory under which all profile data directories live.
 
     This is typically configured to point at a directory that can be
     shared across machines (e.g. a Dropbox or iCloud folder). Each
@@ -326,8 +329,10 @@ def get_active_profile_config() -> ProfileConfig:
 
 
 def get_active_profile_state_dir() -> Path:
-    """Return the directory where the active profile's state files live.
+    """Return the directory where the active profile's data files live.
 
+    This directory typically contains the Overleaf projects info JSON
+    file and the local directory-structure JSON file for the profile.
     The directory is created if it does not already exist.
 
     Returns:
@@ -352,8 +357,8 @@ def get_projects_info_path() -> Path:
     info for the profile (id, title, timestamps, etc.).
 
     The rest of the application should always use this helper rather
-    than hard-coding paths so that future profile-related changes do not
-    require updates elsewhere.
+    than hard-coding paths so that future profile-related changes do
+    not require updates elsewhere.
 
     Returns:
         Path to the overleaf project info JSON file for the active profile.
@@ -363,12 +368,12 @@ def get_projects_info_path() -> Path:
 
 
 def get_directory_structure_path() -> Path:
-    """Return the full path to the local state JSON file for the profile.
+    """Return the full path to the local directory-structure JSON file.
 
-    This file holds OverleafFS (local-only) data (directory structure, pinned,
-    hidden flags, etc.) for the active profile. Keeping the path helper
-    here avoids scattering assumptions about the file layout across the
-    codebase.
+    This file holds OverleafFS (local-only) data (directory structure,
+    pinned/hidden flags, etc.) for the active profile. Keeping the path
+    helper here avoids scattering assumptions about the file layout
+    across the codebase.
 
     Returns:
         Path to the local directory structure JSON file for the active profile.
