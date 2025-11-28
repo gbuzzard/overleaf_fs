@@ -100,6 +100,7 @@ import json
 import shutil
 from typing import Optional
 from pathlib import Path
+import requests
 
 from PySide6.QtCore import Qt, QUrl, QModelIndex, QSortFilterProxyModel, QMimeData, QPoint, QSettings
 from PySide6.QtGui import QAction, QDesktopServices, QDrag
@@ -601,6 +602,18 @@ class MainWindow(QMainWindow):
                 # the request. For now we simply leave the local state
                 # as-is; a future sync attempt may succeed.
                 return
+            except Exception as exc:  # pragma: no cover - defensive
+                # Treat all other errors (network, parsing, etc.) via a
+                # single helper so the user can decide whether to
+                # continue with local data or exit the app.
+                self._handle_sync_error(exc)
+                return
+        except Exception as exc:  # pragma: no cover - defensive
+            # Any non-cookie-related errors during the initial attempt
+            # are handled in the same way: offer the choice to continue
+            # with local data or exit.
+            self._handle_sync_error(exc)
+            return
 
         # On success, reload from disk so the UI reflects the new data.
         self._on_reload_from_disk()
@@ -1075,8 +1088,91 @@ class MainWindow(QMainWindow):
             except CookieRequiredError:
                 # If this still fails, we quietly keep the old state.
                 return
+            except Exception as exc:  # pragma: no cover - defensive
+                self._handle_sync_error(exc)
+                return
+        except Exception as exc:  # pragma: no cover - defensive
+            self._handle_sync_error(exc)
+            return
 
         self._on_reload_from_disk()
+    def _handle_sync_error(self, exc: Exception) -> None:
+        """Handle errors that occur during Overleaf sync operations.
+
+        This helper is used by both the startup sync and manual "Sync
+        with Overleaf" actions to provide a consistent user experience
+        when network or other unexpected errors occur.
+
+        The dialog gives the user a choice between continuing with the
+        last-saved local data or exiting the application entirely.
+        """
+        # Classify the error as best we can using requests' exception
+        # hierarchy. ConnectionError is the most specific case we care
+        # about (e.g. no internet, DNS failure, Overleaf host
+        # unreachable). Other RequestException subclasses are treated as
+        # generic network errors.
+        is_request_exc = isinstance(exc, requests.exceptions.RequestException)
+        is_connection_exc = isinstance(exc, requests.exceptions.ConnectionError)
+
+        if is_connection_exc:
+            reason = (
+                "Overleaf sync failed due to a connection error.\n"
+                "This can happen if there is no internet connection or "
+                "if Overleaf is temporarily unreachable."
+            )
+        elif is_request_exc:
+            reason = (
+                "Overleaf sync failed due to a network error.\n"
+                "This may be caused by a temporary connectivity problem "
+                "or an issue reaching Overleaf."
+            )
+        else:
+            reason = (
+                "Overleaf sync failed due to an unexpected error.\n"
+                "You can continue using the last-saved data, or exit the "
+                "application."
+            )
+
+        details = str(exc).strip()
+        message = reason
+
+        # Log to stderr for debugging purposes.
+        print(f"[OverleafFS] Sync error: {exc}", file=sys.stderr)
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Overleaf sync error")
+        box.setText(message)
+        if details:
+            # Use Qt's standard expandable "Show Details" section so
+            # that the main message remains readable while still
+            # providing access to the underlying exception text.
+            box.setDetailedText(details)
+
+        continue_button = box.addButton(
+            "Continue without syncing", QMessageBox.AcceptRole
+        )
+        exit_button = box.addButton(
+            "Exit application", QMessageBox.RejectRole
+        )
+        box.setDefaultButton(continue_button)
+
+        box.exec()
+
+        if box.clickedButton() is exit_button:
+            # Mark that the user requested an exit so that callers
+            # (including the startup path) can avoid entering the main
+            # event loop after this dialog.
+            self._should_exit = True
+
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+
+            # Also close the main window explicitly so that a running
+            # event loop will terminate once there are no top-level
+            # windows left.
+            self.close()
 
     @staticmethod
     def _on_open_overleaf_dashboard() -> None:
@@ -1660,6 +1756,11 @@ def run() -> None:
     # choosing a profile directory or pasting a cookie header) appear
     # in a clear context.
     window.initialize_data()
+
+    # If initialization requested an early exit (e.g. the user chose
+    # to exit from an error dialog), do not enter the event loop.
+    if getattr(window, "_should_exit", False):
+        return
 
     # Start the event loop.
     app.exec()
