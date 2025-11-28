@@ -1,13 +1,12 @@
-from __future__ import annotations
-
 """
 Qt table model for displaying Overleaf projects in a QTableView.
 
 Summary of design:
 - The core data model for projects lives in ``overleaf_fs.core.models`` as
   ``ProjectRecord`` and ``ProjectIndex``, which cleanly separate
-  "remote" fields (mirrored from Overleaf: id, name, owner, last
-  modified, URL) from "local" fields (folder, pinned, hidden).
+  "remote" projects‑info fields (mirrored from Overleaf: id, name, owner,
+  last modified, URL, archived) from "local" directory‑structure fields
+  (folder, notes, pinned, hidden).
 - This file provides a thin adapter layer between that in-memory
   representation and the Qt view system by implementing a
   ``QAbstractTableModel``. The GUI can attach a ``QTableView`` (and
@@ -18,14 +17,15 @@ Summary of design:
   while keeping the model simple. Additional columns can be added
   later by extending ``_COLUMN_DEFINITIONS`` without changing the rest
   of the application.
-- Archived projects (as indicated by the remote metadata) are
+- Archived projects (as indicated by the remote projects‑info fields) are
   displayed using a muted text color to provide a subtle visual cue
   without changing their names or local folder assignments.
-- The model is read-only for now: editing of project metadata
-  (e.g. folder assignment, pinned, hidden) will be handled via
+- The model is read-only for now: editing of local directory‑structure fields
+  (e.g. folder assignment, notes, pinned, hidden) will be handled via
   dedicated dialogs or other UI elements that update the underlying
   ``ProjectRecord`` objects and then notify the model to refresh.
 """
+from __future__ import annotations
 
 from typing import List, Optional
 
@@ -41,12 +41,12 @@ class ProjectTableModel(QAbstractTableModel):
 
     The model is backed by a flat list of ``ProjectRecord`` instances.
     Higher-level code (e.g. the main window or a controller) is
-    responsible for constructing a ``ProjectIndex`` from the metadata
-    store and passing it into this model via :meth:`set_projects`.
+    responsible for constructing a ``ProjectIndex`` from the combined
+    projects‑info and directory‑structure stores and passing it into this model via :meth:`set_projects`.
 
     Rows correspond to individual projects; columns correspond to
-    specific fields (name, owner, last modified, local folder). The model is
-    read-only and intended to be combined with a
+    specific fields (remote name/owner/last‑modified and the local folder
+    assignment). The model is read-only and intended to be combined with a
     ``QSortFilterProxyModel`` for sorting and filtering in the GUI.
     """
 
@@ -147,22 +147,23 @@ class ProjectTableModel(QAbstractTableModel):
             if col == self.COLUMN_OWNER:
                 return record.remote.owner_label or ""
             if col == self.COLUMN_LAST_MODIFIED:
-                # Prefer the parsed datetime if available, otherwise
-                # fall back to the raw string.
+                # Prefer the parsed datetime if available; otherwise fall back to the
+                # raw string reported by Overleaf in the remote projects‑info data.
                 if record.remote.last_modified is not None:
                     return record.remote.last_modified.isoformat(
                         sep=" ", timespec="seconds"
                     )
                 return record.remote.last_modified_raw or ""
             if col == self.COLUMN_FOLDER:
-                # Show the local folder assignment, treating the Home
-                # folder (no explicit folder) as "Home" for readability.
+                # Show the local folder assignment from the directory‑structure fields,
+                # treating the Home folder (no explicit folder) as "Home" for readability.
                 folder = record.local.folder
                 return folder if folder not in (None, "") else "Home"
 
         if role == Qt.ForegroundRole:
-            # Use a muted text color for archived projects to provide a
-            # subtle visual cue while leaving the underlying data unchanged.
+            # Use a muted text color for archived projects (as indicated by the
+            # remote projects‑info fields) to provide a subtle visual cue while
+            # leaving underlying data unchanged.
             if getattr(record.remote, "archived", False):
                 return QColor(Qt.darkGray)
 
@@ -208,8 +209,8 @@ class ProjectTableModel(QAbstractTableModel):
         """
         Items are selectable and enabled but not editable.
 
-        Editing of local metadata (folder, pinned, hidden) can be
-        implemented later by overriding this method and adding the
+        Editing of local directory‑structure fields (folder, notes, pinned, hidden)
+        can be implemented later by overriding this method and adding the
         ``Qt.ItemIsEditable`` flag for specific columns, together with
         an implementation of ``setData``.
 
