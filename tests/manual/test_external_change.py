@@ -4,19 +4,19 @@ Manual test for external directory‑structure change detection.
 Run with:
     python test_external_change.py
 
-This launches a minimal version of the GUI using a temporary profile
-directory. It guides the user through steps to confirm that external
-directory‑structure changes (e.g., edits to local_state.json) are detected when a
+This launches the GUI using the real active profile’s data directory.
+Before starting, the test makes a backup of local_state.json and restores
+it afterwards (even if the user aborts). The test guides you through
+confirming that external directory‑structure changes are detected when a
 folder or project row is selected.
 
 This is **not** an automated test. It is a developer sanity check.
 """
 
-import tempfile
 import shutil
 from pathlib import Path
 
-from overleaf_fs.core import get_profile_root_dir_optional
+from overleaf_fs.core.config import get_active_profile_state_dir
 
 from PySide6.QtWidgets import QApplication
 from overleaf_fs.gui.main_window import MainWindow
@@ -27,20 +27,27 @@ def main():
     print("This test uses a copy of an existing OverleafFS profile's directory‑structure and projects‑info files.")
     print("Instructions will appear in this console.\n")
 
-    default_root = get_profile_root_dir_optional()
-    if default_root is not None:
-        print(f"Default profile directory detected:\n  {default_root}")
+    # Try to infer the active profile's data directory (the directory
+    # that actually contains local_state.json and overleaf_projects.json).
+    try:
+        default_dir = get_active_profile_state_dir()
+    except RuntimeError:
+        default_dir = None
+
+    if default_dir is not None:
+        print(f"Default profile data directory detected:\n  {default_dir}")
         src_str = input(
-            "Press ENTER to copy the default profile’s data files for testing, or enter another profile directory:\n> "
+            "Press ENTER to copy the default profile’s data files for testing, "
+            "or enter another profile data directory:\n> "
         ).strip()
         if not src_str:
-            src_root = Path(default_root)
+            src_root = Path(default_dir)
         else:
             src_root = Path(src_str).expanduser()
     else:
         src_str = input(
-            "Enter the path to an existing OverleafFS profile directory\n"
-            "(the profile directory containing local_state.json and overleaf_projects.json):\n> "
+            "Enter the path to an existing OverleafFS profile data directory\n"
+            "(the directory containing local_state.json and overleaf_projects.json):\n> "
         ).strip()
         if not src_str:
             print("No source directory provided. Aborting manual test.")
@@ -56,35 +63,38 @@ def main():
         print("Aborting manual test.\n")
         return
 
-    tmp = Path(tempfile.mkdtemp(prefix="ofs_manual_test_"))
-    print(f"\nTemporary test profile directory (containing copied directory‑structure and projects‑info data): {tmp}")
+    local_state = src_root / "local_state.json"
+    projects_file = src_root / "overleaf_projects.json"
 
-    local_state = tmp / "local_state.json"
-    projects_file = tmp / "overleaf_projects.json"
-    shutil.copy2(local_state_src, local_state)
-    shutil.copy2(projects_src, projects_file)
+    backup_local_state = src_root / "local_state_backup_for_manual_test.json"
+    shutil.copy2(local_state, backup_local_state)
+    print(f"\nBackup created:\n  {backup_local_state}")
 
-    print("\nStep 1: The GUI will launch now using the copied directory‑structure and projects‑info data.")
-    print("  - You should see your usual folders/projects (copied into the temp profile).")
-    print("\nStep 2: While the GUI is running, modify the directory‑structure file (local_state.json) externally:")
-    print(f"  {local_state}")
+    print("\nStep 1: The GUI will launch now using your REAL profile data.")
+    print("  A backup copy of local_state.json has been made and will be restored")
+    print("  automatically when the test ends.")
+
+    print("\nStep 2: While the GUI is running, modify the directory‑structure file:")
+    print(f"    {local_state}")
     print("  For example, add a new folder or change a folder assignment.")
-    print("  Then, in the GUI, click on a folder or project again.")
-    print("  You SHOULD see the reload dialog at that point.")
-    print("\nClose the GUI window to end the test.\n")
+    print("  Then click on a folder or project in the GUI.")
+    print("  You SHOULD see the reload dialog.\n")
+    print("NOTE:  Exit by closing the app window rather than killing the process so that files are cleaned up.")
 
-    app = QApplication([])
-    win = MainWindow()
-    # Load the directory‑structure and projects‑info data from the temporary
-    # profile directory so that the copied folders and projects appear
-    # without requiring any network sync.
-    win._on_reload_from_disk()
-    win.show()
+    try:
+        app = QApplication([])
+        win = MainWindow()
+        # Load the directory‑structure and projects‑info data from the profile
+        # directory so that the folders and projects appear without requiring any network sync.
+        win._on_reload_from_disk()
+        win.show()
 
-    app.exec()
-
-    print("Test finished. Temporary test profile directory was:")
-    print(f"  {tmp}")
+        app.exec()
+    finally:
+        if backup_local_state.exists():
+            shutil.copy2(backup_local_state, local_state)
+            backup_local_state.unlink()
+            print("\nlocal_state.json has been restored from backup.")
 
 
 if __name__ == "__main__":

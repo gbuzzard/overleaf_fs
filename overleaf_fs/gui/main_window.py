@@ -135,6 +135,7 @@ from overleaf_fs.core.config import (
     get_profile_root_dir_optional,
     set_profile_root_dir,
     get_overleaf_base_url,
+    get_active_profile_state_dir,
 )
 from overleaf_fs.core.overleaf_scraper import (
     sync_overleaf_projects_for_active_profile,
@@ -790,12 +791,18 @@ class MainWindow(QMainWindow):
         return super().eventFilter(obj, event)
 
     def _check_external_metadata_change(self) -> bool:
-        """Return True if metadata changed on disk and user approves a reload."""
+        """Return True if on-disk projects/structure changed and user approves a reload."""
         try:
-            state_path = get_profile_root_dir_optional() / "local_state.json"
-            projects_path = get_profile_root_dir_optional() / "overleaf_projects.json"
-        except Exception:
+            # Look in the active profile's data directory, which is
+            # where local_state.json (directory-structure data) and
+            # overleaf_projects.json (cached projects info) live.
+            state_dir = get_active_profile_state_dir()
+        except RuntimeError:
+            # No active profile configured yet; nothing to check.
             return False
+
+        state_path = state_dir / "local_state.json"
+        projects_path = state_dir / "overleaf_projects.json"
 
         changed = False
         for p, attr in (
@@ -815,7 +822,7 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "Detected external changes",
-            "Project or folder metadata changed externally.\nReload now?",
+            "Project list or folder assignments changed on disk.\nReload now?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes,
         )
@@ -1074,11 +1081,23 @@ class MainWindow(QMainWindow):
         self._save_expanded_folder_keys(sorted(expanded_keys))
 
     def _on_tree_expanded(self, index: QModelIndex) -> None:
-        """Slot called when the user expands a folder in the tree."""
+        """Slot called when the user expands a folder in the tree.
+
+        Before only updating the persisted expansion state, this also
+        checks whether the on-disk projects-info or directory-structure
+        data changed externally and, if so, offers to reload from disk.
+        """
+        self._check_external_metadata_change()
         self._update_persisted_expanded_folders()
 
     def _on_tree_collapsed(self, index: QModelIndex) -> None:
-        """Slot called when the user collapses a folder in the tree."""
+        """Slot called when the user collapses a folder in the tree.
+
+        Before only updating the persisted expansion state, this also
+        checks whether the on-disk projects-info or directory-structure
+        data changed externally and, if so, offers to reload from disk.
+        """
+        self._check_external_metadata_change()
         self._update_persisted_expanded_folders()
 
     def _create_actions(self) -> None:
@@ -1706,9 +1725,14 @@ class MainWindow(QMainWindow):
         Forwards the selection key (All Projects, Pinned, Archived,
         Home, or a specific folder path) to the proxy model's folder
         filter, which shows projects assigned directly to that folder.
+
+        Before applying the filter, this checks whether the on-disk
+        projects-info or directory-structure data changed externally
+        (e.g., due to edits on this or another machine) and, if so,
+        offers to reload from disk.
         """
-        reloaded = self._check_external_metadata_change()
-        # proceed normally regardless; reload already applied if chosen
+        self._check_external_metadata_change()
+        # Proceed normally regardless; reload already applied if chosen.
         if not isinstance(key, (str, type(None))):
             return
 
@@ -1723,9 +1747,13 @@ class MainWindow(QMainWindow):
 
         Prompts the user for a folder name, constructs the full folder
         path (optionally as a subfolder of ``parent_path``), and updates
-        the local metadata via ``create_folder()``. Finally reloads the
-        project index and folder tree.
+        the local directory-structure data via ``create_folder()``.
+        Before performing any changes, this checks whether the on-disk
+        projects-info or directory-structure data changed externally and,
+        if so, offers to reload from disk. Finally reloads the project
+        index and folder tree.
         """
+        self._check_external_metadata_change()
         if not isinstance(parent_path, (str, type(None))):
             return
 
@@ -1774,9 +1802,13 @@ class MainWindow(QMainWindow):
         Slot called when the tree requests renaming an existing folder.
 
         Prompts the user for a new name, updates the folder path and any
-        project assignments in the local metadata via ``rename_folder()``,
-        and reloads the project index and folder tree.
+        project assignments in the local directory-structure data via
+        ``rename_folder()``, and reloads the project index and folder
+        tree. Before performing any changes, this checks whether the
+        on-disk projects-info or directory-structure data changed
+        externally and, if so, offers to reload from disk.
         """
+        self._check_external_metadata_change()
         if not isinstance(folder_path, str) or not folder_path:
             return
 
@@ -1834,8 +1866,11 @@ class MainWindow(QMainWindow):
         Confirms the deletion with the user, then attempts to delete the
         folder via ``delete_folder()``. If any projects are still assigned
         to the folder or its descendants, a message is shown and no changes
-        are made.
+        are made. Before performing any changes, this checks whether the
+        on-disk projects-info or directory-structure data changed
+        externally and, if so, offers to reload from disk.
         """
+        self._check_external_metadata_change()
         if not isinstance(folder_path, str) or not folder_path:
             return
 
@@ -1875,10 +1910,14 @@ class MainWindow(QMainWindow):
         Slot called when the tree requests moving one or more projects
         into a folder via drag-and-drop.
 
-        Updates local metadata via ``move_projects_to_folder()`` and
-        reloads the project index and folder tree so that both the tree
-        and the table reflect the new assignments.
+        Updates the local directory-structure data via
+        ``move_projects_to_folder()`` and reloads the project index and
+        folder tree so that both the tree and the table reflect the new
+        assignments. Before performing any changes, this checks whether
+        the on-disk projects-info or directory-structure data changed
+        externally and, if so, offers to reload from disk.
         """
+        self._check_external_metadata_change()
         if not isinstance(project_ids, list):
             return
         if not all(isinstance(pid, str) for pid in project_ids):
@@ -1901,14 +1940,21 @@ class MainWindow(QMainWindow):
 
         self._load_projects()
 
-    @staticmethod
-    def _on_tree_double_clicked(index: QModelIndex) -> None:
+    def _on_tree_double_clicked(self, index: QModelIndex) -> None:
         """
         Slot invoked when the user double-clicks a node in the folder tree.
 
         If the special "All Projects" node is double-clicked, open the
         Overleaf projects dashboard in the default web browser.
+
+        Before opening the browser, this checks whether the on-disk
+        projects-info or directory-structure data changed externally and,
+        if so, offers to reload from disk.
         """
+        # Check for external changes (e.g. edits from another machine)
+        # before acting on the current selection.
+        self._check_external_metadata_change()
+
         if not index.isValid():
             return
 
@@ -1935,7 +1981,15 @@ class MainWindow(QMainWindow):
         Slot invoked when the user double-clicks a row in the project table.
 
         Opens the corresponding project URL in the default web browser.
+
+        Before opening the browser, this checks whether the on-disk
+        projects-info or directory-structure data changed externally and,
+        if so, offers to reload from disk.
         """
+        # Check for external changes (e.g. edits from another machine)
+        # before acting on the current selection.
+        self._check_external_metadata_change()
+
         # Map the proxy index back to the source row in the underlying model.
         source_index = self._proxy.mapToSource(index)
         row = source_index.row()
