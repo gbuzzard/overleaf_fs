@@ -3,14 +3,17 @@ Project index handling.
 
 This module loads and merges two sources of truth:
 
-1. Remote project metadata (owner, modified time, name, URL, etc.)
-   stored in the profile's `overleaf_projects.json` file.
+1. Remote projects info (id, name, URL, owner, modified time, archived, etc.)
+   stored in the profile's cached projects‑info JSON file
+   (``overleaf_projects.json``).
 
-2. Local project metadata (folder, pinned, hidden)
-   stored in the profile's `local_state.json` file.
+2. Local directory‑structure fields (folder, notes, pinned, hidden)
+   stored in the profile's directory‑structure JSON file
+   (``local_state.json``).
 
-The function `load_project_index()` returns a `ProjectIndex` mapping
-project IDs to `ProjectRecord` instances containing both parts.
+The function ``load_project_index()`` returns a ``ProjectIndex`` mapping
+project IDs to ``ProjectRecord`` instances combining both remote projects
+info and local directory‑structure fields.
 
 Future versions will add automatic syncing with the Overleaf dashboard.
 """
@@ -38,10 +41,10 @@ import logging
 def load_project_index() -> ProjectIndex:
     index: ProjectIndex = {}
 
-    # Load local metadata (folder, pinned, hidden)
+    # Load local directory‑structure fields (folder, notes, pinned, hidden)
     local_meta = load_local_metadata()
 
-    # Load remote metadata from profile-aware metadata file
+    # Load remote projects info from the profile's projects‑info file
     projects_info_path = get_projects_info_path()
     try:
         raw = projects_info_path.read_text(encoding='utf-8')
@@ -66,7 +69,7 @@ def load_project_index() -> ProjectIndex:
             )
         except Exception as exc:
             # Warn about malformed entries rather than silently skipping
-            # them. This may indicate that the profile metadata file is
+            # them. This may indicate that the cached projects‑info file is
             # corrupted or out of sync with Overleaf.
             logging.warning(
                 "Skipping malformed project entry in %s: %r (error: %s)",
@@ -86,8 +89,9 @@ def load_project_index() -> ProjectIndex:
 
 def save_project_index(index: ProjectIndex) -> None:
     """
-    Persist the local portion of the project index to the profile's
-    local_state.json. Remote metadata is never written locally.
+    Persist the local directory‑structure portion of the project index to
+    the profile's directory‑structure JSON file. Remote projects info is
+    never written locally.
     """
     local = {proj_id: rec.local for proj_id, rec in index.items()}
     save_local_metadata(local)
