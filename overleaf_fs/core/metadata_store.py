@@ -1,22 +1,22 @@
 """
-Local metadata storage for Overleaf projects.
+Local directory-structure storage for Overleaf projects.
 
 Design overview
 ---------------
 The core data model (see ``overleaf_fs.core.models``) separates
-"remote" metadata that mirrors what Overleaf reports about a project
-(id, name, owner, last modified, URL) from "local" metadata that
-captures how you organize and annotate projects on your own machine
-(folder, notes, pinned, hidden).
+"remote" projects info (what Overleaf reports about a project: id, name,
+owner, last modified, URL, etc.) from "local" organization and
+annotation data that lives only on your machine (folder, notes, pinned,
+hidden).
 
-This module focuses on persisting and loading the *local* metadata,
-keyed by project id, using a simple JSON file on disk. The JSON schema
-is intentionally lightweight and stable:
+This module focuses on persisting and loading the *local* directory
+structure and per-project local fields, keyed by project id, using a
+simple JSON file on disk. The JSON schema is intentionally lightweight
+and stable:
 
 .. code-block:: json
 
     {
-      "version": 1,
       "folders": [
         "CT",
         "Teaching",
@@ -34,31 +34,34 @@ is intentionally lightweight and stable:
           "pinned": false,
           "hidden": false
         }
-      }
+      },
+      "version": 1,
     }
 Note that the entry "" for "folder" indicates the top level directory,
 "Home/", which is prepended to all folders.  E.g., "CT" maps to "Home/CT".
-Only the local fields are stored. The remote fields are refreshed from
-Overleaf (or, currently, from dummy data) and merged with this local
-metadata into ``ProjectRecord`` instances elsewhere.
+Only the local fields are stored. The remote projects info is refreshed
+from Overleaf (or, currently, from dummy data) and merged with this
+local directory-structure data into ``ProjectRecord`` instances
+elsewhere.
 
 At this stage the module provides two layers of API:
 
 - ``load_local_state()`` / ``save_local_state()``: work with a
   ``LocalState`` object that includes both the explicit folder list
-  and the per-project ``ProjectLocal`` metadata.
+  and the per-project ``ProjectLocal`` fields (folder/notes/pinned/hidden).
 - ``load_local_metadata()`` / ``save_local_metadata()``: convenience
   wrappers that deal only with the per-project mapping and preserve
   any existing folder list on disk.
 
-By default the local-state file is stored inside the active profile's
-state directory. For a fresh installation this is typically
+By default the directory-structure JSON file is stored inside the active
+profile's data directory. For a fresh installation this is typically
 ``~/.overleaf_fs/profiles/primary/local_state.json``. This keeps the
-local metadata separate from any particular project working directory
-while remaining easy to inspect and version-control if desired. The
-exact path is determined by ``overleaf_fs.core.config.get_directory_structure_path()``,
-so that future multi-profile and shared-directory support can be added
-without changing callers.
+local directory structure and annotations separate from any particular
+project working directory while remaining easy to inspect and
+version-control if desired. The exact path is determined by
+``overleaf_fs.core.config.get_directory_structure_path()``, so that
+future multi-profile and shared-directory support can be added without
+changing callers.
 """
 
 from __future__ import annotations
