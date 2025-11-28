@@ -1,7 +1,3 @@
-from __future__ import annotations
-
-import json
-
 """
 Tree widget for navigating Overleaf projects by virtual folder.
 
@@ -9,7 +5,8 @@ Design
 ------
 The project tree shows a Finder-like folder hierarchy on the left side
 of the GUI. It is not derived from Overleaf; it reflects only the local
-organizational structure stored in ``metadata_store``:
+organizational structure stored in the directory-structure store
+(``metadata_store`` module):
 
 - Special nodes:
     * All Projects
@@ -18,7 +15,8 @@ organizational structure stored in ``metadata_store``:
 
 - Folder nodes:
     A nested hierarchy defined by the explicit list of folder paths
-    stored in the metadata file (e.g. "CT", "Teaching/2025").
+    stored in the directory-structure JSON file (e.g. "CT",
+    "Teaching/2025").
 
 Selecting a node emits ``folderSelected`` with one of:
     "__ALL__"        → show all projects
@@ -29,6 +27,9 @@ Selecting a node emits ``folderSelected`` with one of:
 The MainWindow listens for ``folderSelected`` and updates the proxy
 filter accordingly.
 """
+from __future__ import annotations
+
+import json
 
 from typing import List, Optional
 
@@ -332,9 +333,10 @@ class ProjectTree(QTreeView):
         """
         Show a context menu for basic folder operations.
 
-        The tree itself does not modify metadata; instead it emits
-        high-level signals that a controller (e.g. MainWindow) can
-        handle by updating LocalState via ``metadata_store``.
+        The tree itself does not directly modify the directory-structure
+        data; instead it emits high-level signals that a controller
+        (e.g. MainWindow) can handle by updating the local directory-
+        structure state (``LocalState``) via ``metadata_store``.
         """
         index = self.indexAt(event.pos())
         item = self._model.itemFromIndex(index) if index.isValid() else None
@@ -465,10 +467,11 @@ class ProjectTree(QTreeView):
         """
         Handle a drop of project ids onto a folder node.
 
-        The tree itself does not mutate metadata; it simply parses the
-        project ids from the mime data and emits a high-level signal
-        that a controller (e.g. MainWindow) can handle by updating the
-        local state via ``metadata_store``.
+        The tree itself does not mutate the directory-structure data; it
+        simply parses the project ids from the mime data and emits a
+        high-level signal that a controller (e.g. MainWindow) can handle
+        by updating the local directory-structure state via
+        ``metadata_store``.
         """
         # Clear any visual drop highlight and pending auto-expand now
         # that the drop is complete.
