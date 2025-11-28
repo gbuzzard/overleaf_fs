@@ -11,12 +11,12 @@ Profiles and configuration
 - Each user has a *profile root directory* containing:
     * overleaf base URL (standard or institution-hosted),
     * saved Overleaf session cookie (optional),
-    * scraped Overleaf project metadata (JSON),
-    * local metadata (folders, project assignments, expanded-tree state).
+    * scraped Overleaf project information (title, owner, etc) (JSON),
+    * local directory structure (folders, project assignments, expanded-tree state).
 - On first launch, the user is prompted to choose a profile-root directory
   (ideally in cloud storage to enable multi-machine access).
-- Profiles can be moved to a new directory at any time; existing metadata
-  is migrated seamlessly.
+- Profiles can be moved to a new directory at any time; existing data files
+  are migrated seamlessly.
 - The Overleaf base URL is flexible, allowing institutional Overleaf
   instances (e.g., ORNL) by storing the URL in the profile.
 
@@ -28,16 +28,16 @@ Overleaf authentication and scraping
 - If WebEngine is unavailable, the user can paste the Cookie header
   manually as a fallback.
 - The scraper fetches the project list from the Overleaf JSON endpoint
-  (the same data used by Overleaf’s dashboard). Metadata is stored
-  per-profile and used to populate the GUI.
-- A toolbar “Sync with Overleaf” action refreshes metadata using the
+  (the same data used by Overleaf’s dashboard). Project data (title, etc)
+  is stored per-profile and used to populate the GUI.
+- A toolbar “Sync with Overleaf” action refreshes project data using the
   saved cookie, prompting the user only if necessary.
 
 Core model
 ----------
 - `ProjectRecord` combines:
-    * remote metadata (id, name, owner, last_modified, archived, URL),
-    * local metadata (folder assignment, pinned, hidden).
+    * remote project data (id, name, owner, last_modified, archived, URL),
+    * local directory structure (folder assignment, pinned, hidden).
 - `ProjectIndex` holds all project records in-memory.
 
 Views and models
@@ -63,7 +63,7 @@ Interaction flow
     * the “All Projects” tree node → opens the Overleaf dashboard URL,
       based on the profile’s Overleaf base URL.
 - Dragging:
-    * projects → drop into folders to reassign folder metadata,
+    * projects → drop into folders to update folder assignment,
     * folders → reorganize folder hierarchy,
     * hover-expansion allows dropping into collapsed subfolders.
 
@@ -71,7 +71,7 @@ Toolbar and menus
 -----------------
 Toolbar:
     - Sync with Overleaf
-    - Reload from disk (local metadata only)
+    - Reload from disk (local directory structure only)
     - Help
 
 Menus:
@@ -82,16 +82,16 @@ Menus:
 Startup sequence
 ----------------
 1. Show the main window.
-2. Prompt user for profile directory if not yet configured.
+2. Prompt user for the directory to hold all profiles if not yet configured.
 3. Attempt initial sync (with saved cookie if available).
-4. Load project index + folder metadata.
+4. Load project data (scraped from overleaf) + local directory structure.
 5. Restore folder expansion state and last selected folder.
 
 Overall
 -------
 This module provides a responsive, intuitive desktop interface for
 browsing, organizing, and synchronizing Overleaf projects, while keeping
-the underlying metadata portable and profile-aware.
+the underlying directory structure portable and profile-aware.
 """
 
 from __future__ import annotations
@@ -258,7 +258,7 @@ class _ProjectSortFilterProxyModel(QSortFilterProxyModel):
             folder_ok = record.local.pinned and not record.local.hidden
         elif key == ARCHIVED_KEY:
             # Only archived, non-hidden projects (virtual view based on
-            # remote metadata; local folder assignment is ignored).
+            # archived tag from overleaf; local folder assignment is ignored).
             folder_ok = getattr(record.remote, "archived", False) and not record.local.hidden
         elif key == "":
             # Home: projects without an explicit folder.
@@ -476,19 +476,19 @@ class MainWindow(QMainWindow):
 
         # Per-machine UI settings (e.g. expanded folders) are stored via
         # QSettings so that basic view state is restored across restarts
-        # without affecting the profile metadata.
+        # without affecting the profile directory structure.
         self._settings = QSettings("OverleafFS", "ProjectExplorer")
 
-        # Track the last time metadata was loaded from disk and the last
+        # Track the last time directory structure was loaded from disk and the last
         # successful sync with Overleaf so we can show this in the UI.
         self._last_loaded: Optional[datetime] = None
         self._last_synced: Optional[datetime] = None
         self._load_persisted_sync_times()
 
         # Ensure that the profile root directory is configured before we
-        # attempt to load or synchronize any metadata. On a clean first
-        # run, this will prompt the user to choose a location (ideally a
-        # cloud-synced folder) for OverleafFS profiles.
+        # attempt to load directory structure or synchronize overleaf data.
+        # On a clean first run, this will prompt the user to choose a
+        # location (ideally a cloud-synced folder) for OverleafFS profiles.
         # (Data initialization is now performed after the main window is shown.)
 
         # Core model and proxy for sorting/filtering.
@@ -505,7 +505,8 @@ class MainWindow(QMainWindow):
         self._table = ProjectTableView(self)
         self._table.setModel(self._proxy)
         self._configure_table()
-        # Connect selection change to check for external metadata changes.
+        # Connect selection change to check for external changes to
+        # the directory structure or the overleaf project data.
         sel_model = self._table.selectionModel()
         if sel_model:
             sel_model.selectionChanged.connect(lambda *_: self._check_external_metadata_change())
@@ -522,7 +523,7 @@ class MainWindow(QMainWindow):
         # the search field has focus.
         self._search.installEventFilter(self)
 
-        # Cached mtimes for external metadata change detection
+        # Cached mtimes for external overleaf data/directory structure change detection
         self._cached_mtime_local_state_json = None
         self._cached_mtime_overleaf_projects_json = None
 
@@ -627,7 +628,7 @@ class MainWindow(QMainWindow):
             self._settings.remove("last_loaded_iso")
 
     def _set_last_loaded_now(self) -> None:
-        """Record that we have just loaded metadata from disk."""
+        """Record that we have just loaded projects and directory structure from disk."""
         self._last_loaded = datetime.now()
         self._save_sync_times()
         self._update_status_sync_label()
@@ -686,7 +687,7 @@ class MainWindow(QMainWindow):
         )
 
     def initialize_data(self) -> None:
-        """Load metadata from disk and perform an initial Overleaf sync.
+        """Load projects and directory structure from disk and perform an initial Overleaf sync.
 
         On startup we always load whatever is available on disk so the
         UI becomes responsive quickly, then we attempt to refresh from
@@ -705,11 +706,11 @@ class MainWindow(QMainWindow):
     def _initial_sync_from_overleaf(self) -> None:
         """Attempt an initial Overleaf sync for the active profile.
 
-        This is called once on startup after local metadata has been
-        loaded from disk. If a valid cookie is available, it refreshes
-        the remote project list. If no cookie is available or the saved
-        cookie has expired, the user is offered the option to log in via
-        the embedded browser.
+        This is called once on startup after local projects and
+        directory structure have been loaded from disk. If a valid
+        cookie is available, it refreshes the remote project list. If
+        no cookie is available or the saved cookie has expired, the
+        user is offered the option to log in via the embedded browser.
         """
         try:
             # Try with whatever cookie (if any) is already stored.
@@ -734,7 +735,7 @@ class MainWindow(QMainWindow):
                 )
             except CookieRequiredError:
                 # Even with a freshly obtained cookie, Overleaf rejected
-                # the request. For now we simply leave the local state
+                # the request. For now we simply leave the local data
                 # as-is; a future sync attempt may succeed.
                 return
             except Exception as exc:  # pragma: no cover - defensive
@@ -852,8 +853,9 @@ class MainWindow(QMainWindow):
         cleanly.
 
         The chosen directory is persisted via
-        :func:`set_profile_root_dir` and then used by the core metadata
-        and scraper code to locate profile-specific state.
+        :func:`set_profile_root_dir` and then used by the core
+        configuration, projects-info, and directory-structure helpers,
+        along with the scraper code, to locate profile-specific data.
         """
         root = get_profile_root_dir_optional()
         if root is not None:
@@ -911,7 +913,7 @@ class MainWindow(QMainWindow):
         set_profile_root_dir(Path(selected_files[0]))
 
     def _cloud_sidebar_urls(self) -> list[QUrl]:
-        """Return a list of sidebar URLs for useful storage locations.
+        """Return a list of sidebar URLs for useful profile/data locations.
 
         The sidebar entries are intended to make it easy to navigate to:
 
@@ -976,9 +978,10 @@ class MainWindow(QMainWindow):
 
         This is a heuristic used when the user chooses a new profile
         folder. If the selected directory already contains OverleafFS
-        metadata files (e.g., from another machine), we treat it as an
-        existing profile root and offer to switch to it rather than
-        moving the current profile into that directory.
+        profile data files (e.g., project-info and directory-structure
+        JSON from another machine), we treat it as an existing profile
+        root and offer to switch to it rather than moving the current
+        profile into that directory.
         """
         try:
             path = path.expanduser().resolve()
@@ -990,8 +993,9 @@ class MainWindow(QMainWindow):
             return False
 
         # Heuristic: consider this a profile root if it contains one of
-        # the known metadata files either directly, or inside a single
-        # subfolder such as "primary".
+        # the known profile data files (project info, directory structure,
+        # or profile config) either directly, or inside a single subfolder
+        # such as "primary".
         sentinel_names = {
             "overleaf_projects.json",
             "local_state.json",
@@ -1087,9 +1091,10 @@ class MainWindow(QMainWindow):
         * Profile/environment: "Change profile folder…",
         * Help: "Help" and "About" dialogs.
         """
-        # Reload from disk: re-read local metadata without any network
-        # access. This is the safest way to refresh the view when only
-        # local folder assignments have changed.
+        # Reload from disk: re-read local projects info and directory
+        # structure without any network access. This is the safest way
+        # to refresh the view when only local folder assignments or
+        # other local organization have changed.
         self._reload_action = QAction("Reload from disk", self)
         # self._reload_action.setStatusTip("Reload projects from local metadata (no network)")
         self._reload_action.setToolTip("Reload directory structure from disk (e.g., if changed from another computer)")
@@ -1098,8 +1103,8 @@ class MainWindow(QMainWindow):
         self.addAction(self._reload_action)
 
         # Sync with Overleaf: contact Overleaf using a saved cookie
-        # (prompting if needed), update local metadata, and then reload
-        # the view.
+        # (prompting if needed), update the on-disk projects info, and
+        # then reload the view.
         self._sync_action = QAction("Sync with Overleaf", self)
         # self._sync_action.setStatusTip("Synchronize project list with Overleaf and reload")
         self._sync_action.setToolTip("Synchronize project list with Overleaf and reload")
@@ -1114,8 +1119,8 @@ class MainWindow(QMainWindow):
         self._open_dashboard_action.triggered.connect(self._on_open_overleaf_dashboard)
 
         # Change profile folder: allow the user to move the profile
-        # metadata directory to a new folder (e.g. a different
-        # cloud-synced location).
+        # data directory to a new folder (e.g. a different cloud-synced
+        # location).
         self._change_profile_location_action = QAction("Change profile folder…", self)
         # self._change_profile_location_action.setStatusTip("Choose a new directory for OverleafFS profiles")
         self._change_profile_location_action.setToolTip("Choose a new directory for OverleafFS profiles")
@@ -1185,11 +1190,11 @@ class MainWindow(QMainWindow):
         """
         Load (or reload) the project index and update the table model.
 
-        This loads the project index and local state, rebuilds the
-        folder tree from the union of known folders and per-project
-        assignments, and then attempts to restore the previously
-        selected folder (All Projects, Pinned, Archived, Home, or a
-        specific folder path).
+        This loads the project index and local directory structure,
+        rebuilds the folder tree from the union of known folders and
+        per-project assignments, and then attempts to restore the
+        previously selected folder (All Projects, Pinned, Archived,
+        Home, or a specific folder path).
         """
         # Remember whichever folder key we were last told about.
         current_key = getattr(self, "_current_folder_key", ALL_KEY)
@@ -1258,7 +1263,7 @@ class MainWindow(QMainWindow):
             # in that case we simply leave whatever selection Qt chooses.
             pass
 
-        # Record that we have just loaded metadata from disk.
+        # Record that we have just loaded projects and directory structure from disk.
         self._set_last_loaded_now()
 
         status = self.statusBar()
@@ -1266,10 +1271,11 @@ class MainWindow(QMainWindow):
             status.showMessage(f"Loaded {len(index)} projects", 3000)
 
     def _on_reload_from_disk(self) -> None:
-        """Reload projects and folders from local metadata.
+        """Reload projects and folders from local data on disk.
 
         This operation does not contact Overleaf; it simply re-reads the
-        local project index and metadata and refreshes the views.
+        local project index and directory structure and refreshes the
+        views.
         """
         self._load_projects()
 
@@ -1291,7 +1297,7 @@ class MainWindow(QMainWindow):
                     remember_cookie=remember,
                 )
             except CookieRequiredError:
-                # If this still fails, we quietly keep the old state.
+                # If this still fails, we quietly keep the last-saved data.
                 return
             except Exception as exc:  # pragma: no cover - defensive
                 self._handle_sync_error(exc)
@@ -1597,7 +1603,8 @@ class MainWindow(QMainWindow):
 
         This is used when a valid Overleaf cookie is missing or has
         likely expired. If the user declines, the application remains in
-        its current state (using whatever local metadata is available).
+        its current state (using whatever local projects info and
+        directory structure are available).
         """
         reply = QMessageBox.question(
             self,
