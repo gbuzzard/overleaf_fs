@@ -2,8 +2,9 @@
 Helpers for synchronizing the local project index with Overleaf.
 
 This module implements a minimal HTML-scraping workflow for refreshing
-the profile's ``overleaf_projects.json`` from the Overleaf project
-dashboard. It is built around two key ideas:
+the profile's cached Overleaf projects info JSON file
+(``overleaf_projects.json``) from the Overleaf project dashboard.
+It is built around two key ideas:
 
 * Each profile is associated with an Overleaf **base URL** (for
   example, ``https://www.overleaf.com`` for the public service or an
@@ -36,7 +37,7 @@ The current Overleaf dashboard exposes the project list via a JSON blob
 embedded in a ``<meta>`` tag (``name="ol-prefetchedProjectsBlob"``). We
 parse that blob rather than scraping visual table markup. The parsing
 logic is intentionally defensive: if it cannot find any projects, it
-raises a clear error instead of silently writing an empty metadata
+raises a clear error instead of silently writing an empty project info
 file.
 
 Future enhancements may include using a more direct JSON API if Overleaf
@@ -95,6 +96,7 @@ def _get_overleaf_host() -> str:
     host = parsed.hostname or "www.overleaf.com"
     return host
 
+
 # Name of the JSON file where we optionally store a browser-derived
 # cookie header for the active profile.
 COOKIE_FILENAME = "overleaf_cookie.json"
@@ -120,14 +122,14 @@ class OverleafProjectDTO:
         id: Overleaf project identifier.
         name: Human-readable project name.
         url: Full URL to the project on Overleaf.
-        owner_label: Label derived from Overleaf project metadata.
+        owner_label: Label derived from Overleaf project info.
             At the moment this is typically the owner's email address,
             but it is intentionally kept as a free-form string so we
             are not tightly coupled to a particular field.
         last_modified_iso: ISO 8601 timestamp string for the last
             modified time, or None if not available.
         last_modified_raw: Raw "last modified" value as obtained
-            from Overleaf metadata, typically the same ISO 8601
+            from Overleaf info, typically the same ISO 8601
             timestamp string. Keeping the raw string allows us to
             display or log it even if parsing fails or the format
             changes.
@@ -152,7 +154,7 @@ def _get_cookie_path() -> Path:
     """Return the path to the cookie JSON file for the active profile.
 
     Returns:
-        Path to the cookie file in the active profile's state directory.
+        Path to the cookie file in the active profile's data directory.
     """
     state_dir = config.get_active_profile_state_dir()
     return state_dir / COOKIE_FILENAME
@@ -162,7 +164,7 @@ def load_saved_cookie_header() -> Optional[str]:
     """Load a previously saved cookie header for the active profile.
 
     The cookie header is stored as a small JSON document under the
-    profile's state directory. If the file does not exist, or cannot be
+    profile's data directory. If the file does not exist, or cannot be
     parsed, this returns None.
 
     Returns:
@@ -191,7 +193,7 @@ def save_cookie_header(cookie_header: str) -> None:
     The caller (typically GUI code) is responsible for asking the user
     whether they want to remember the cookie on this machine. This
     helper simply writes the header and a timestamp into a small JSON
-    file under the active profile's state directory.
+    file under the active profile's data directory.
 
     Args:
         cookie_header: Raw Cookie header string copied from the browser.
@@ -284,11 +286,11 @@ def parse_projects_from_html(html: str) -> List[OverleafProjectDTO]:
 
     This function is intentionally conservative: if it cannot find any
     projects, it raises a ValueError rather than silently returning an
-    empty list, to avoid accidentally overwriting the metadata file with
+    empty list, to avoid accidentally overwriting the cached projects info file with
     an empty project list due to a parsing failure.
 
     The current Overleaf dashboard embeds a JSON blob of project
-    metadata in a ``<meta>`` tag with ``name="ol-prefetchedProjectsBlob"``
+    info in a ``<meta>`` tag with ``name="ol-prefetchedProjectsBlob"``
     and ``data-type="json"``. The ``content`` attribute of this tag
     contains an HTML-escaped JSON array of project objects. We decode
     and parse that blob rather than scraping visual table markup.
@@ -313,7 +315,7 @@ def parse_projects_from_html(html: str) -> List[OverleafProjectDTO]:
 
     projects: List[OverleafProjectDTO] = []
 
-    # The Overleaf dashboard embeds a JSON array of project metadata in a
+    # The Overleaf dashboard embeds a JSON array of project info in a
     # <meta> tag with name="ol-prefetchedProjectsBlob" and data-type="json".
     # The content attribute holds an HTML-escaped JSON string such as:
     #
@@ -440,7 +442,7 @@ def scrape_overleaf_projects(session: requests.Session) -> List[OverleafProjectD
 
 
 def _dto_to_metadata_entry(dto: OverleafProjectDTO) -> dict:
-    """Convert a DTO into the JSON entry format used by project_index.
+    """Convert a DTO into the projects-info JSON entry format used by project_index.
 
     Args:
         dto: Project DTO to convert.
@@ -460,13 +462,13 @@ def _dto_to_metadata_entry(dto: OverleafProjectDTO) -> dict:
 
 
 def write_overleaf_metadata(projects: Iterable[OverleafProjectDTO]) -> Path:
-    """Write the given projects into the profile's metadata file.
+    """Write the given projects into the profile's projects-info JSON file.
 
     Args:
         projects: Iterable of OverleafProjectDTO instances.
 
     Returns:
-        Path to the metadata file that was written.
+        Path to the projects-info file that was written.
     """
     projects_info_path = get_projects_info_path()
     payload = [_dto_to_metadata_entry(dto) for dto in projects]
@@ -474,7 +476,7 @@ def write_overleaf_metadata(projects: Iterable[OverleafProjectDTO]) -> Path:
         json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
     )
     LOGGER.info(
-        "Wrote %d Overleaf projects to metadata file %s",
+        "Wrote %d Overleaf projects to projects-info file %s",
         len(payload),
         projects_info_path,
     )
@@ -485,15 +487,15 @@ def refresh_projects_with_cookie(
     cookie_header: str,
     remember_cookie: bool = False,
 ) -> List[OverleafProjectDTO]:
-    """Refresh the project metadata using a browser-derived cookie header.
+    """Refresh the cached Overleaf projects info using a browser-derived cookie header.
 
     This is the main entry point for GUI code when the user pastes a
     Cookie header string. It will:
 
     * Build an authenticated HTTP session from the cookie header.
     * Scrape the project dashboard.
-    * Write the resulting project list to ``overleaf_projects.json`` for
-      the active profile.
+    * Write the resulting project list to the cached projects-info JSON
+      file (``overleaf_projects.json``) for the active profile.
     * Optionally persist the cookie header so that future refreshes can
       reuse it without requiring the user to paste it again.
 
@@ -536,7 +538,7 @@ def refresh_projects_with_cookie(
 
 
 def refresh_projects_with_saved_cookie() -> List[OverleafProjectDTO]:
-    """Refresh the project metadata using a previously saved cookie.
+    """Refresh the cached Overleaf projects info using a previously saved cookie.
 
     This helper is intended for use by a \"Refresh from Overleaf\" action
     that does not prompt the user for a cookie every time. If no saved
@@ -572,7 +574,7 @@ def sync_overleaf_projects_for_active_profile(
     GUI code. It encapsulates the two common refresh workflows:
 
     * If ``cookie_header`` is provided, it is used to build a new
-      session and refresh the metadata. If ``remember_cookie`` is
+      session and refresh the cached projects info. If ``remember_cookie`` is
       True, the header is also persisted for future use.
     * If ``cookie_header`` is None, the function attempts to use a
       previously saved cookie header via
@@ -609,8 +611,8 @@ def sync_overleaf_projects_for_active_profile(
 if __name__ == "__main__":  # pragma: no cover - manual test harness
     """Simple CLI entry point for testing the Overleaf scraper.
 
-    This tool does **not** modify the profile's configured metadata
-    files or saved cookie. It is intended for manual testing only: it
+    This tool does **not** modify the profile's configured projects-info
+    file or saved cookie. It is intended for manual testing only: it
     fetches the project list from Overleaf using a browser-derived
     Cookie header and writes the resulting JSON payload to a local file
     (by default ``overleaf_projects_test.json``) in the current working
