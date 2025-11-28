@@ -92,8 +92,11 @@ DEFAULT_PROFILE_DISPLAY_NAME = "Primary"
 # - DEFAULT_DIRECTORY_STRUCTURE_FILENAME: local-only directory structure and
 #   related flags. This is the "directory-structure JSON file"
 #   (``local_directory_structure.json``).
+# - DEFAULT_PROFILE_CONFIG_FILENAME: per-profile configuration JSON file
+#   (``profile_config.json``) stored in the profile root.
 DEFAULT_PROJECTS_INFO_FILENAME = "overleaf_projects_info.json"
 DEFAULT_DIRECTORY_STRUCTURE_FILENAME = "local_directory_structure.json"
+DEFAULT_PROFILE_CONFIG_FILENAME = "profile_config.json"
 
 # Default base URL for the Overleaf server used by a profile. This can
 # be overridden per profile (for example, to support institution-hosted

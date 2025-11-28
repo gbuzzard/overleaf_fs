@@ -55,7 +55,7 @@ At this stage the module provides two layers of API:
 
 By default the directory-structure JSON file is stored inside the active
 profile's data directory. For a fresh installation this is typically
-``~/.overleaf_fs/profiles/primary/local_state.json``. This keeps the
+``~/.overleaf_fs/profiles/primary/local_directory_structure.json``. This keeps the
 local directory structure and annotations separate from any particular
 project working directory while remaining easy to inspect and
 version-control if desired. The exact path is determined by

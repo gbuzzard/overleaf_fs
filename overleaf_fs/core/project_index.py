@@ -5,11 +5,11 @@ This module loads and merges two sources of truth:
 
 1. Remote projects info (id, name, URL, owner, modified time, archived, etc.)
    stored in the profile's cached projects‑info JSON file
-   (``overleaf_projects.json``).
+   (``overleaf_projects_info.json``).
 
 2. Local directory‑structure fields (folder, notes, pinned, hidden)
    stored in the profile's directory‑structure JSON file
-   (``local_state.json``).
+   (``local_directory_structure.json``).
 
 The function ``load_project_index()`` returns a ``ProjectIndex`` mapping
 project IDs to ``ProjectRecord`` instances combining both remote projects

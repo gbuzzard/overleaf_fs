@@ -5,8 +5,8 @@ Run with:
     python test_external_change.py
 
 This launches the GUI using the real active profile’s data directory.
-Before starting, the test makes a backup of local_state.json and restores
-it afterwards (even if the user aborts). The test guides you through
+Before starting, the test makes a backup of local_directory_structure.json
+and restores it afterwards (even if the user aborts). The test guides you through
 confirming that external directory‑structure changes are detected when a
 folder or project row is selected.
 
@@ -28,7 +28,8 @@ def main():
     print("Instructions will appear in this console.\n")
 
     # Try to infer the active profile's data directory (the directory
-    # that actually contains local_state.json and overleaf_projects.json).
+    # that actually contains local_directory_structure.json and
+    # overleaf_projects_info.json).
     try:
         default_dir = get_active_profile_data_dir()
     except RuntimeError:
@@ -47,35 +48,39 @@ def main():
     else:
         src_str = input(
             "Enter the path to an existing OverleafFS profile data directory\n"
-            "(the directory containing local_state.json and overleaf_projects.json):\n> "
+            "(the directory containing local_directory_structure.json and overleaf_projects_info.json):\n> "
         ).strip()
         if not src_str:
             print("No source directory provided. Aborting manual test.")
             return
         src_root = Path(src_str).expanduser()
-    local_state_src = src_root / "local_state.json"
-    projects_src = src_root / "overleaf_projects.json"
+    directory_structure_src = src_root / "local_directory_structure.json"
+    projects_info_src = src_root / "overleaf_projects_info.json"
 
-    if not local_state_src.exists() or not projects_src.exists():
+    if not directory_structure_src.exists() or not projects_info_src.exists():
         print("\nERROR: Could not find required files in the source directory:")
-        print(f"  {local_state_src if local_state_src.exists() else 'local_state.json missing'}")
-        print(f"  {projects_src if projects_src.exists() else 'overleaf_projects.json missing'}")
+        print(
+            f"  {directory_structure_src if directory_structure_src.exists() else 'local_directory_structure.json missing'}"
+        )
+        print(
+            f"  {projects_info_src if projects_info_src.exists() else 'overleaf_projects_info.json missing'}"
+        )
         print("Aborting manual test.\n")
         return
 
-    local_state = src_root / "local_state.json"
-    projects_file = src_root / "overleaf_projects.json"
+    directory_structure = src_root / "local_directory_structure.json"
+    projects_info_file = src_root / "overleaf_projects_info.json"
 
-    backup_local_state = src_root / "local_state_backup_for_manual_test.json"
-    shutil.copy2(local_state, backup_local_state)
-    print(f"\nBackup created:\n  {backup_local_state}")
+    backup_directory_structure = src_root / "local_directory_structure_manual_test_backup.json"
+    shutil.copy2(directory_structure, backup_directory_structure)
+    print(f"\nBackup created:\n  {backup_directory_structure}")
 
     print("\nStep 1: The GUI will launch now using your REAL profile data.")
-    print("  A backup copy of local_state.json has been made and will be restored")
+    print("  A backup copy of local_directory_structure.json has been made and will be restored")
     print("  automatically when the test ends.")
 
-    print("\nStep 2: While the GUI is running, modify the directory‑structure file:")
-    print(f"    {local_state}")
+    print("\nStep 2: While the GUI is running, modify the original directory‑structure file:")
+    print(f"    {directory_structure}")
     print("  For example, add a new folder or change a folder assignment.")
     print("  Then click on a folder or project in the GUI.")
     print("  You SHOULD see the reload dialog.\n")
@@ -91,10 +96,10 @@ def main():
 
         app.exec()
     finally:
-        if backup_local_state.exists():
-            shutil.copy2(backup_local_state, local_state)
-            backup_local_state.unlink()
-            print("\nlocal_state.json has been restored from backup.")
+        if backup_directory_structure.exists():
+            shutil.copy2(backup_directory_structure, directory_structure)
+            backup_directory_structure.unlink()
+            print("\nlocal_directory_structure.json has been restored from backup.")
 
 
 if __name__ == "__main__":

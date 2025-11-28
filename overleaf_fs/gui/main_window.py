@@ -136,6 +136,9 @@ from overleaf_fs.core.config import (
     set_profile_root_dir,
     get_overleaf_base_url,
     get_active_profile_data_dir,
+    DEFAULT_PROJECTS_INFO_FILENAME,
+    DEFAULT_DIRECTORY_STRUCTURE_FILENAME,
+    DEFAULT_PROFILE_CONFIG_FILENAME,
 )
 from overleaf_fs.core.overleaf_scraper import (
     sync_overleaf_projects_for_active_profile,
@@ -524,9 +527,13 @@ class MainWindow(QMainWindow):
         # the search field has focus.
         self._search.installEventFilter(self)
 
-        # Cached mtimes for external overleaf data/directory structure change detection
-        self._cached_mtime_local_state_json = None
-        self._cached_mtime_overleaf_projects_json = None
+        # Cached mtimes for external Overleaf data and directory-structure change detection
+        self._cached_mtime_directory_structure_json = None
+        self._cached_mtime_projects_info_json = None
+
+        # Guard flag to temporarily disable external-change checks during
+        # internal reloads (e.g., after a sync or metadata edit).
+        self._suspend_external_change_checks = False
 
         # Folder tree on the left.
         self._tree = ProjectTree(self)
@@ -790,24 +797,52 @@ class MainWindow(QMainWindow):
 
         return super().eventFilter(obj, event)
 
+    def _update_cached_metadata_mtimes(self) -> None:
+        """Refresh cached mtimes for the projects-info and directory-structure JSON files.
+
+        This is called after we load or reload data from disk so that
+        subsequent external-change checks only trigger on changes that
+        happened outside this process.
+        """
+        try:
+            state_dir = get_active_profile_data_dir()
+        except RuntimeError:
+            # No active profile configured yet; nothing to cache.
+            return
+
+        for path, attr in (
+            (state_dir / DEFAULT_DIRECTORY_STRUCTURE_FILENAME, "_cached_mtime_directory_structure_json"),
+            (state_dir / DEFAULT_PROJECTS_INFO_FILENAME, "_cached_mtime_projects_info_json"),
+        ):
+            if path.exists():
+                try:
+                    mtime = path.stat().st_mtime
+                except OSError:
+                    mtime = None
+            else:
+                mtime = None
+            setattr(self, attr, mtime)
+
     def _check_external_metadata_change(self) -> bool:
         """Return True if on-disk projects/structure changed and user approves a reload."""
+        if getattr(self, "_suspend_external_change_checks", False):
+            return False
         try:
             # Look in the active profile's data directory, which is
-            # where local_state.json (directory-structure data) and
-            # overleaf_projects.json (cached projects info) live.
+            # where local_directory_structure.json (directory-structure data)
+            # and overleaf_projects_info.json (cached projects info) live.
             state_dir = get_active_profile_data_dir()
         except RuntimeError:
             # No active profile configured yet; nothing to check.
             return False
 
-        state_path = state_dir / "local_state.json"
-        projects_path = state_dir / "overleaf_projects.json"
+        state_path = state_dir / DEFAULT_DIRECTORY_STRUCTURE_FILENAME
+        projects_path = state_dir / DEFAULT_PROJECTS_INFO_FILENAME
 
         changed = False
         for p, attr in (
-            (state_path, "_cached_mtime_local_state_json"),
-            (projects_path, "_cached_mtime_overleaf_projects_json"),
+            (state_path, "_cached_mtime_directory_structure_json"),
+            (projects_path, "_cached_mtime_projects_info_json"),
         ):
             if p.exists():
                 mtime = p.stat().st_mtime
@@ -1004,9 +1039,9 @@ class MainWindow(QMainWindow):
         # or profile config) either directly, or inside a single subfolder
         # such as "primary".
         sentinel_names = {
-            "overleaf_projects.json",
-            "local_state.json",
-            "profile_config.json",
+            DEFAULT_PROJECTS_INFO_FILENAME,
+            DEFAULT_DIRECTORY_STRUCTURE_FILENAME,
+            DEFAULT_PROFILE_CONFIG_FILENAME,
         }
 
         # First: check top-level files.
@@ -1215,79 +1250,93 @@ class MainWindow(QMainWindow):
         previously selected folder (All Projects, Pinned, Archived,
         Home, or a specific folder path).
         """
-        # Remember whichever folder key we were last told about.
-        current_key = getattr(self, "_current_folder_key", ALL_KEY)
-
-        index = load_project_index()
-        self._model.set_projects(index)
-
-        # Load any previously persisted expanded-folder state so that we
-        # can restore it on the first load in a new session.
-        persisted_expanded_keys = set(self._load_expanded_folder_keys())
-
-        # Capture which folder nodes are currently expanded so we can
-        # restore that state after rebuilding the tree model. This helps
-        # avoid collapsing parent folders when operations such as
-        # drag-and-drop trigger a reload.
-        expanded_keys: set[str] = set()
-        tree_model = self._tree.model()
-        if tree_model is not None:
-            def _collect_expanded(parent_index: QModelIndex) -> None:
-                row_count = tree_model.rowCount(parent_index)
-                for row in range(row_count):
-                    idx = tree_model.index(row, 0, parent_index)
-                    if not idx.isValid():
-                        continue
-                    item_key = tree_model.data(idx, FolderPathRole)
-                    if self._tree.isExpanded(idx) and isinstance(item_key, str):
-                        expanded_keys.add(item_key)
-                    _collect_expanded(idx)
-
-            _collect_expanded(QModelIndex())
-        state = load_local_state()
-        folder_paths = set(state.folders)
-        for record in index.values():
-            folder = record.local.folder
-            if folder:
-                folder_paths.add(folder)
-
-        self._tree.set_folders(sorted(folder_paths))
-
-        # Restore expanded folders based on the keys we captured before
-        # rebuilding the tree, or fall back to any persisted keys from
-        # the previous session when there is no current-session state
-        # (e.g. the first load after startup).
-        tree_model = self._tree.model()
-        union_expanded_keys = expanded_keys or persisted_expanded_keys
-        if tree_model is not None and union_expanded_keys:
-            def _expand_matching(parent_index: QModelIndex) -> None:
-                row_count = tree_model.rowCount(parent_index)
-                for row in range(row_count):
-                    idx = tree_model.index(row, 0, parent_index)
-                    if not idx.isValid():
-                        continue
-                    item_key = tree_model.data(idx, FolderPathRole)
-                    if isinstance(item_key, str) and item_key in union_expanded_keys:
-                        self._tree.setExpanded(idx, True)
-                    _expand_matching(idx)
-
-            _expand_matching(QModelIndex())
-
-        # Try to restore the previous selection so that operations like
-        # drag-and-drop do not unexpectedly change the user's view.
+        # Temporarily suppress external-change checks while we perform
+        # an internal reload. This prevents our own writes and the
+        # resulting mtime updates from triggering the "Reload?" dialog.
+        self._suspend_external_change_checks = True
         try:
-            self._tree.select_folder_key(current_key)
-        except AttributeError:
-            # Older versions of ProjectTree may not have select_folder_key;
-            # in that case we simply leave whatever selection Qt chooses.
-            pass
+            # Remember whichever folder key we were last told about.
+            current_key = getattr(self, "_current_folder_key", ALL_KEY)
 
-        # Record that we have just loaded projects and directory structure from disk.
-        self._set_last_loaded_now()
+            index = load_project_index()
+            self._model.set_projects(index)
 
-        status = self.statusBar()
-        if status is not None:
-            status.showMessage(f"Loaded {len(index)} projects", 3000)
+            # Load any previously persisted expanded-folder state so that we
+            # can restore it on the first load in a new session.
+            persisted_expanded_keys = set(self._load_expanded_folder_keys())
+
+            # Capture which folder nodes are currently expanded so we can
+            # restore that state after rebuilding the tree model. This helps
+            # avoid collapsing parent folders when operations such as
+            # drag-and-drop trigger a reload.
+            expanded_keys: set[str] = set()
+            tree_model = self._tree.model()
+            if tree_model is not None:
+                def _collect_expanded(parent_index: QModelIndex) -> None:
+                    row_count = tree_model.rowCount(parent_index)
+                    for row in range(row_count):
+                        idx = tree_model.index(row, 0, parent_index)
+                        if not idx.isValid():
+                            continue
+                        item_key = tree_model.data(idx, FolderPathRole)
+                        if self._tree.isExpanded(idx) and isinstance(item_key, str):
+                            expanded_keys.add(item_key)
+                        _collect_expanded(idx)
+
+                _collect_expanded(QModelIndex())
+            state = load_local_state()
+            folder_paths = set(state.folders)
+            for record in index.values():
+                folder = record.local.folder
+                if folder:
+                    folder_paths.add(folder)
+
+            self._tree.set_folders(sorted(folder_paths))
+
+            # Restore expanded folders based on the keys we captured before
+            # rebuilding the tree, or fall back to any persisted keys from
+            # the previous session when there is no current-session state
+            # (e.g. the first load after startup).
+            tree_model = self._tree.model()
+            union_expanded_keys = expanded_keys or persisted_expanded_keys
+            if tree_model is not None and union_expanded_keys:
+                def _expand_matching(parent_index: QModelIndex) -> None:
+                    row_count = tree_model.rowCount(parent_index)
+                    for row in range(row_count):
+                        idx = tree_model.index(row, 0, parent_index)
+                        if not idx.isValid():
+                            continue
+                        item_key = tree_model.data(idx, FolderPathRole)
+                        if isinstance(item_key, str) and item_key in union_expanded_keys:
+                            self._tree.setExpanded(idx, True)
+                        _expand_matching(idx)
+
+                _expand_matching(QModelIndex())
+
+            # Try to restore the previous selection so that operations like
+            # drag-and-drop do not unexpectedly change the user's view.
+            try:
+                self._tree.select_folder_key(current_key)
+            except AttributeError:
+                # Older versions of ProjectTree may not have select_folder_key;
+                # in that case we simply leave whatever selection Qt chooses.
+                pass
+
+            # Record that we have just loaded projects and directory structure from disk.
+            self._set_last_loaded_now()
+
+            status = self.statusBar()
+            if status is not None:
+                status.showMessage(f"Loaded {len(index)} projects", 3000)
+
+            # After a successful load, refresh the cached mtimes so that
+            # external-change detection only triggers on changes that
+            # occur outside this process.
+            self._update_cached_metadata_mtimes()
+        finally:
+            # Re-enable external-change checks after the internal reload
+            # has completed and the cached mtimes have been updated.
+            self._suspend_external_change_checks = False
 
     def _on_reload_from_disk(self) -> None:
         """Reload projects and folders from local data on disk.

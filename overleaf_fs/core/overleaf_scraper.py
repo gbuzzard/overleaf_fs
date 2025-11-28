@@ -2,8 +2,8 @@
 Helpers for synchronizing the local project index with Overleaf.
 
 This module implements a minimal HTML-scraping workflow for refreshing
-the profile's cached Overleaf projects info JSON file
-(``overleaf_projects.json``) from the Overleaf project dashboard.
+the profile's cached Overleaf projects-info JSON file
+(``overleaf_projects_info.json``) from the Overleaf project dashboard.
 It is built around two key ideas:
 
 * Each profile is associated with an Overleaf **base URL** (for
@@ -116,7 +116,8 @@ class OverleafProjectDTO:
     """Simple data transfer object for a single Overleaf project.
 
     This is the intermediate representation used by the scraper logic
-    before we write the profile's ``overleaf_projects.json`` file.
+    before we write the profile's projects-info JSON file
+    (``overleaf_projects_info.json``).
 
     Attributes:
         id: Overleaf project identifier.
@@ -448,7 +449,8 @@ def _dto_to_metadata_entry(dto: OverleafProjectDTO) -> dict:
         dto: Project DTO to convert.
 
     Returns:
-        Dictionary suitable for serializing into ``overleaf_projects.json``.
+        Dictionary suitable for serializing into the projects-info JSON file
+        (``overleaf_projects_info.json``).
     """
     return {
         "id": dto.id,
@@ -495,7 +497,7 @@ def refresh_projects_with_cookie(
     * Build an authenticated HTTP session from the cookie header.
     * Scrape the project dashboard.
     * Write the resulting project list to the cached projects-info JSON
-      file (``overleaf_projects.json``) for the active profile.
+      file (``overleaf_projects_info.json``) for the active profile.
     * Optionally persist the cookie header so that future refreshes can
       reuse it without requiring the user to paste it again.
 
