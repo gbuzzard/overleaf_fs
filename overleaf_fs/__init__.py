@@ -7,7 +7,7 @@ from .gui.main_window import run as _run
 
 def run_gui() -> None:
     """
-    Start the Overleaf Project Explorer GUI.
+    Start the Overleaf File System GUI.
 
     This is a convenience wrapper around :func:`overleaf_fs.gui.main_window.run`
     so that users can do:

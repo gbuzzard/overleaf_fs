@@ -1,5 +1,5 @@
 """
-Configuration helpers for the Overleaf Project Explorer.
+Configuration helpers for the Overleaf File System.
 
 New requirement
 ---------------
@@ -73,7 +73,7 @@ from typing import Any, Dict, Optional
 
 # Name of the per-user "bootstrap" directory under the home directory.
 # This directory holds only lightweight configuration for the Overleaf
-# Project Explorer (e.g. config.json) and is not intended to contain
+# File System (e.g. config.json) and is not intended to contain
 # large state files directly.
 APP_DIR_NAME = ".overleaf_fs"
 
@@ -341,34 +341,37 @@ def get_active_profile_state_dir() -> Path:
     return state_dir
 
 
-def get_metadata_path() -> Path:
-    """Return the full path to the metadata JSON file for the profile.
+def get_projects_info_path() -> Path:
+    """Return the full path to the Overleaf projects info JSON file.
 
     For the active profile this is typically something like::
 
         get_active_profile_state_dir() / "overleaf_projects.json"
+
+    This file holds the cached list of Overleaf projects and related
+    info for the profile (id, title, timestamps, etc.).
 
     The rest of the application should always use this helper rather
     than hard-coding paths so that future profile-related changes do not
     require updates elsewhere.
 
     Returns:
-        Path to the metadata JSON file for the active profile.
+        Path to the overleaf project info JSON file for the active profile.
     """
 
     return get_active_profile_state_dir() / DEFAULT_METADATA_FILENAME
 
 
-def get_local_state_path() -> Path:
+def get_directory_structure_path() -> Path:
     """Return the full path to the local state JSON file for the profile.
 
-    This file is intended to hold local-only metadata (folders, pinned,
+    This file holds OverleafFS (local-only) data (directory structure, pinned,
     hidden flags, etc.) for the active profile. Keeping the path helper
     here avoids scattering assumptions about the file layout across the
     codebase.
 
     Returns:
-        Path to the local state JSON file for the active profile.
+        Path to the local directory structure JSON file for the active profile.
     """
 
     return get_active_profile_state_dir() / DEFAULT_LOCAL_STATE_FILENAME

@@ -60,7 +60,7 @@ import requests
 from bs4 import BeautifulSoup  # type: ignore[import]
 
 from overleaf_fs.core import config
-from overleaf_fs.core.config import get_metadata_path, get_overleaf_base_url
+from overleaf_fs.core.config import get_projects_info_path, get_overleaf_base_url
 
 
 LOGGER = logging.getLogger(__name__)
@@ -468,17 +468,17 @@ def write_overleaf_metadata(projects: Iterable[OverleafProjectDTO]) -> Path:
     Returns:
         Path to the metadata file that was written.
     """
-    metadata_path = get_metadata_path()
+    projects_info_path = get_projects_info_path()
     payload = [_dto_to_metadata_entry(dto) for dto in projects]
-    metadata_path.write_text(
+    projects_info_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
     )
     LOGGER.info(
         "Wrote %d Overleaf projects to metadata file %s",
         len(payload),
-        metadata_path,
+        projects_info_path,
     )
-    return metadata_path
+    return projects_info_path
 
 
 def refresh_projects_with_cookie(

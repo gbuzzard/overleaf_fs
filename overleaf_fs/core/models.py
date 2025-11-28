@@ -53,7 +53,7 @@ class ProjectRemote:
 @dataclass
 class ProjectLocal:
     """
-    Local-only metadata used by the Overleaf Project Explorer.
+    Local-only metadata used by the Overleaf File System.
 
     These fields are never pushed back to Overleaf; they represent how
     you choose to organize and annotate projects on your own machine.

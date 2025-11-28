@@ -30,7 +30,7 @@ from overleaf_fs.core.models import (
 from overleaf_fs.core.metadata_store import load_local_metadata
 from overleaf_fs.core.metadata_store import save_local_metadata
 
-from overleaf_fs.core.config import get_metadata_path
+from overleaf_fs.core.config import get_projects_info_path
 import json
 import logging
 
@@ -42,9 +42,9 @@ def load_project_index() -> ProjectIndex:
     local_meta = load_local_metadata()
 
     # Load remote metadata from profile-aware metadata file
-    metadata_path = get_metadata_path()
+    projects_info_path = get_projects_info_path()
     try:
-        raw = metadata_path.read_text(encoding='utf-8')
+        raw = projects_info_path.read_text(encoding='utf-8')
         remote_entries = json.loads(raw)
     except Exception:
         remote_entries = []
@@ -70,7 +70,7 @@ def load_project_index() -> ProjectIndex:
             # corrupted or out of sync with Overleaf.
             logging.warning(
                 "Skipping malformed project entry in %s: %r (error: %s)",
-                metadata_path,
+                projects_info_path,
                 entry,
                 exc,
             )

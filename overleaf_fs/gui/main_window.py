@@ -1,5 +1,5 @@
 """
-Main window for the Overleaf Project Explorer GUI.
+Main window for the Overleaf File System GUI.
 
 Design overview
 ---------------
@@ -103,7 +103,7 @@ from typing import Optional
 from pathlib import Path
 import requests
 
-from PySide6.QtCore import Qt, QUrl, QModelIndex, QSortFilterProxyModel, QMimeData, QPoint, QSettings, Signal
+from PySide6.QtCore import Qt, QUrl, QModelIndex, QSortFilterProxyModel, QMimeData, QPoint, QSettings, Signal, QEvent
 from PySide6.QtGui import QAction, QDesktopServices, QDrag
 from PySide6.QtWidgets import (
     QApplication,
@@ -120,6 +120,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
     QLabel,
+    QStyle,
 )
 
 from overleaf_fs.core.project_index import load_project_index
@@ -459,7 +460,7 @@ class ProjectTableView(QTableView):
 
 class MainWindow(QMainWindow):
     """
-    Main window for the Overleaf Project Explorer GUI.
+    Main window for the Overleaf File System GUI.
 
     The window contains a folder tree on the left and, on the right, a
     search box and a table of projects backed by ``ProjectTableModel``
@@ -471,7 +472,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Overleaf Project Explorer")
+        self.setWindowTitle("Overleaf File System")
 
         # Per-machine UI settings (e.g. expanded folders) are stored via
         # QSettings so that basic view state is restored across restarts
@@ -504,6 +505,10 @@ class MainWindow(QMainWindow):
         self._table = ProjectTableView(self)
         self._table.setModel(self._proxy)
         self._configure_table()
+        # Connect selection change to check for external metadata changes.
+        sel_model = self._table.selectionModel()
+        if sel_model:
+            sel_model.selectionChanged.connect(lambda *_: self._check_external_metadata_change())
 
         # Connect double-click to "open project in browser".
         self._table.doubleClicked.connect(self._on_table_double_clicked)
@@ -512,6 +517,14 @@ class MainWindow(QMainWindow):
         self._search = QLineEdit(self)
         self._search.setPlaceholderText("Search projects…")
         self._search.textChanged.connect(self._proxy.setFilterText)
+        self._configure_search_bar()
+        # Let the main window intercept certain keys (e.g. Escape) while
+        # the search field has focus.
+        self._search.installEventFilter(self)
+
+        # Cached mtimes for external metadata change detection
+        self._cached_mtime_local_state_json = None
+        self._cached_mtime_overleaf_projects_json = None
 
         # Folder tree on the left.
         self._tree = ProjectTree(self)
@@ -636,7 +649,20 @@ class MainWindow(QMainWindow):
         """Return a short multi-line summary of sync/load status."""
         loaded_str = self._format_timestamp_for_display(self._last_loaded)
         synced_str = self._format_timestamp_for_display(self._last_synced)
+
+        # Include the active profile folder so users can see which
+        # profile/location is currently in use.
+        root = get_profile_root_dir_optional()
+        if root is not None:
+            try:
+                root_str = str(root.expanduser().resolve())
+            except Exception:
+                root_str = str(root)
+        else:
+            root_str = "not configured"
+
         return (
+            f"Active profile folder: {root_str}\n"
             f"Last loaded from disk: {loaded_str}\n"
             f"Last successful sync with Overleaf: {synced_str}\n"
             "(All times shown in local time.)"
@@ -732,6 +758,71 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # UI setup helpers
     # ------------------------------------------------------------------
+    def _standard_icon(self, pixmap):
+        """Return a platform-appropriate standard icon."""
+        return self.style().standardIcon(pixmap)
+
+    def _configure_search_bar(self) -> None:
+        """Configure the search field (clear button and leading icon)."""
+        # Use the built-in clear button so the user can quickly reset
+        # the search text. This uses a native-looking "X" icon on each
+        # platform and hides itself when the field is empty.
+        self._search.setClearButtonEnabled(True)
+
+        # Add a small standard icon at the leading (left) edge to
+        # signal that this field controls filtering / search.
+        search_icon = self._standard_icon(QStyle.SP_FileDialogContentsView)
+        self._search.addAction(search_icon, QLineEdit.LeadingPosition)
+
+    def eventFilter(self, obj, event):  # type: ignore[override]
+        """Intercept Escape in the search field to clear the text.
+
+        This keeps the standard Escape behavior elsewhere in the UI
+        while making it easy to reset the filter when focus is in the
+        search box.
+        """
+        if obj is self._search and event.type() == QEvent.KeyPress:
+            if event.key() == Qt.Key_Escape and self._search.text():
+                self._search.clear()
+                return True
+
+        return super().eventFilter(obj, event)
+
+    def _check_external_metadata_change(self) -> bool:
+        """Return True if metadata changed on disk and user approves a reload."""
+        try:
+            state_path = get_profile_root_dir_optional() / "local_state.json"
+            projects_path = get_profile_root_dir_optional() / "overleaf_projects.json"
+        except Exception:
+            return False
+
+        changed = False
+        for p, attr in (
+            (state_path, "_cached_mtime_local_state_json"),
+            (projects_path, "_cached_mtime_overleaf_projects_json"),
+        ):
+            if p.exists():
+                mtime = p.stat().st_mtime
+                last = getattr(self, attr)
+                if last is not None and last != mtime:
+                    changed = True
+                setattr(self, attr, mtime)
+
+        if not changed:
+            return False
+
+        reply = QMessageBox.question(
+            self,
+            "Detected external changes",
+            "Project or folder metadata changed externally.\nReload now?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            self._on_reload_from_disk()
+            return True
+        return False
+
     def _configure_table(self) -> None:
         """
         Configure basic properties of the project table view.
@@ -1032,15 +1123,15 @@ class MainWindow(QMainWindow):
 
         # Help: brief overview of basic interactions in the GUI.
         self._help_action = QAction("Help", self)
-        # self._help_action.setStatusTip("Show basic usage help for Overleaf Project Explorer")
-        self._help_action.setToolTip("Show basic usage help for Overleaf Project Explorer")
+        # self._help_action.setStatusTip("Show basic usage help for Overleaf File System")
+        self._help_action.setToolTip("Show basic usage and status for Overleaf File System")
         self._help_action.triggered.connect(self._on_help)
 
         # About: show information about this application and its home
         # on GitHub.
         self._about_action = QAction("About", self)
-        # self._about_action.setStatusTip("About Overleaf Project Explorer")
-        self._about_action.setToolTip("About Overleaf Project Explorer")
+        # self._about_action.setStatusTip("About Overleaf File System")
+        self._about_action.setToolTip("About Overleaf File System")
         self._about_action.triggered.connect(self._on_about)
 
     def _create_toolbar(self) -> None:
@@ -1483,7 +1574,7 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(
             self,
-            "Overleaf Project Explorer - Help",
+            "Overleaf File System - Help",
             help_text,
         )
 
@@ -1491,8 +1582,8 @@ class MainWindow(QMainWindow):
         """Show an About dialog pointing to the GitHub repository."""
         QMessageBox.information(
             self,
-            "About Overleaf Project Explorer",
-            "Overleaf Project Explorer\n\n"
+            "About Overleaf File System",
+            "Overleaf File System\n\n"
             "GitHub repository:\n"
             "https://github.com/gbuzzard/overleaf_file_system",
         )
@@ -1609,6 +1700,8 @@ class MainWindow(QMainWindow):
         Home, or a specific folder path) to the proxy model's folder
         filter, which shows projects assigned directly to that folder.
         """
+        reloaded = self._check_external_metadata_change()
+        # proceed normally regardless; reload already applied if chosen
         if not isinstance(key, (str, type(None))):
             return
 
