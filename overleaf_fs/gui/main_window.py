@@ -98,11 +98,12 @@ from __future__ import annotations
 import sys
 import json
 import shutil
+from datetime import datetime
 from typing import Optional
 from pathlib import Path
 import requests
 
-from PySide6.QtCore import Qt, QUrl, QModelIndex, QSortFilterProxyModel, QMimeData, QPoint, QSettings
+from PySide6.QtCore import Qt, QUrl, QModelIndex, QSortFilterProxyModel, QMimeData, QPoint, QSettings, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QDrag
 from PySide6.QtWidgets import (
     QApplication,
@@ -118,6 +119,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QAbstractItemView,
     QFileDialog,
+    QLabel,
 )
 
 from overleaf_fs.core.project_index import load_project_index
@@ -147,6 +149,16 @@ from overleaf_fs.gui.project_tree import (
 )
 from overleaf_fs.gui.overleaf_login import OverleafLoginDialog, WEBENGINE_AVAILABLE
 
+
+class _StatusLabel(QLabel):
+    """Clickable label used in the status bar to show sync/load info."""
+
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event):  # type: ignore[override]
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
 
 
 class _ProjectSortFilterProxyModel(QSortFilterProxyModel):
@@ -466,6 +478,12 @@ class MainWindow(QMainWindow):
         # without affecting the profile metadata.
         self._settings = QSettings("OverleafFS", "ProjectExplorer")
 
+        # Track the last time metadata was loaded from disk and the last
+        # successful sync with Overleaf so we can show this in the UI.
+        self._last_loaded: Optional[datetime] = None
+        self._last_synced: Optional[datetime] = None
+        self._load_persisted_sync_times()
+
         # Ensure that the profile root directory is configured before we
         # attempt to load or synchronize any metadata. On a clean first
         # run, this will prompt the user to choose a location (ideally a
@@ -536,8 +554,18 @@ class MainWindow(QMainWindow):
         self._create_toolbar()
         self._create_menus()
 
-        # Status bar for lightweight feedback messages.
+        # Status bar for lightweight feedback messages, plus a persistent
+        # summary of last sync/load times.
         self.setStatusBar(QStatusBar(self))
+        status_bar = self.statusBar()
+        self._status_last_sync_label = _StatusLabel(self)
+        self._status_last_sync_label.setObjectName("LastSyncStatusLabel")
+        self._status_last_sync_label.setToolTip(
+            "Click for detailed sync and cache information"
+        )
+        self._status_last_sync_label.clicked.connect(self._show_sync_status_dialog)
+        status_bar.addPermanentWidget(self._status_last_sync_label)
+        self._update_status_sync_label()
 
         # Set a comfortable default window size so that the key columns
         # are visible on first launch. The OS may remember geometry in
@@ -549,6 +577,87 @@ class MainWindow(QMainWindow):
         # performed explicitly after the main window is shown, via
         # ``initialize_data()``. This keeps the UI responsive and makes
         # it clear why any dialogs are appearing.
+
+    # ------------------------------------------------------------------
+    # Sync/load timestamp helpers
+    # ------------------------------------------------------------------
+    def _load_persisted_sync_times(self) -> None:
+        """Restore last-loaded and last-synced timestamps from QSettings."""
+        sync_raw = self._settings.value("last_synced_iso", "")
+        load_raw = self._settings.value("last_loaded_iso", "")
+
+        self._last_synced = None
+        self._last_loaded = None
+
+        if isinstance(sync_raw, str) and sync_raw:
+            try:
+                self._last_synced = datetime.fromisoformat(sync_raw)
+            except ValueError:
+                self._last_synced = None
+
+        if isinstance(load_raw, str) and load_raw:
+            try:
+                self._last_loaded = datetime.fromisoformat(load_raw)
+            except ValueError:
+                self._last_loaded = None
+
+    def _save_sync_times(self) -> None:
+        """Persist last-loaded and last-synced timestamps via QSettings."""
+        if self._last_synced is not None:
+            self._settings.setValue("last_synced_iso", self._last_synced.isoformat())
+        else:
+            self._settings.remove("last_synced_iso")
+
+        if self._last_loaded is not None:
+            self._settings.setValue("last_loaded_iso", self._last_loaded.isoformat())
+        else:
+            self._settings.remove("last_loaded_iso")
+
+    def _set_last_loaded_now(self) -> None:
+        """Record that we have just loaded metadata from disk."""
+        self._last_loaded = datetime.now()
+        self._save_sync_times()
+        self._update_status_sync_label()
+
+    def _set_last_synced_now(self) -> None:
+        """Record that a sync with Overleaf just completed successfully."""
+        self._last_synced = datetime.now()
+        self._save_sync_times()
+        self._update_status_sync_label()
+
+    def _format_timestamp_for_display(self, value: Optional[datetime]) -> str:
+        """Return a human-readable local-time string or 'never'."""
+        if value is None:
+            return "never"
+        # Compact, predictable format.
+        return value.strftime("%Y-%m-%d %H:%M")
+
+    def _sync_status_summary(self) -> str:
+        """Return a short multi-line summary of sync/load status."""
+        loaded_str = self._format_timestamp_for_display(self._last_loaded)
+        synced_str = self._format_timestamp_for_display(self._last_synced)
+        return (
+            f"Last loaded from disk: {loaded_str}\n"
+            f"Last successful sync with Overleaf: {synced_str}\n"
+            "(All times shown in local time.)"
+        )
+
+    def _update_status_sync_label(self) -> None:
+        """Update the permanent status-bar label with sync/load info."""
+        if not hasattr(self, "_status_last_sync_label"):
+            return
+        loaded_str = self._format_timestamp_for_display(self._last_loaded)
+        synced_str = self._format_timestamp_for_display(self._last_synced)
+        text = f"Synced: {synced_str} • Loaded: {loaded_str} (click for details)"
+        self._status_last_sync_label.setText(text)
+
+    def _show_sync_status_dialog(self) -> None:
+        """Show a dialog with detailed sync/load information."""
+        QMessageBox.information(
+            self,
+            "Sync and cache status",
+            "Sync and cache status:\n\n" + self._sync_status_summary(),
+        )
 
     def initialize_data(self) -> None:
         """Load metadata from disk and perform an initial Overleaf sync.
@@ -615,7 +724,9 @@ class MainWindow(QMainWindow):
             self._handle_sync_error(exc)
             return
 
-        # On success, reload from disk so the UI reflects the new data.
+        # On success, record the sync time and reload from disk so the UI
+        # reflects the new data.
+        self._set_last_synced_now()
         self._on_reload_from_disk()
 
     # ------------------------------------------------------------------
@@ -1056,6 +1167,9 @@ class MainWindow(QMainWindow):
             # in that case we simply leave whatever selection Qt chooses.
             pass
 
+        # Record that we have just loaded metadata from disk.
+        self._set_last_loaded_now()
+
         status = self.statusBar()
         if status is not None:
             status.showMessage(f"Loaded {len(index)} projects", 3000)
@@ -1091,11 +1205,14 @@ class MainWindow(QMainWindow):
             except Exception as exc:  # pragma: no cover - defensive
                 self._handle_sync_error(exc)
                 return
-        except Exception as exc:  # pragma: no cover - defensive
-            self._handle_sync_error(exc)
-            return
+            except Exception as exc:  # pragma: no cover - defensive
+                self._handle_sync_error(exc)
+                return
 
-        self._on_reload_from_disk()
+            # Successful sync; record timestamp and reload from disk.
+            self._set_last_synced_now()
+            self._on_reload_from_disk()
+
     def _handle_sync_error(self, exc: Exception) -> None:
         """Handle errors that occur during Overleaf sync operations.
 
@@ -1350,9 +1467,7 @@ class MainWindow(QMainWindow):
 
     def _on_help(self) -> None:
         """Show a brief help dialog with basic usage instructions."""
-        QMessageBox.information(
-            self,
-            "Overleaf Project Explorer - Help",
+        help_text = (
             "Basic usage:\n\n"
             "- Use the folder tree on the left to select Home or a specific folder.\n"
             "- Right-click a folder to create, rename, or delete folders.\n"
@@ -1361,8 +1476,15 @@ class MainWindow(QMainWindow):
             "- Double-click 'All Projects' in the tree to open the Overleaf\n"
             "  projects dashboard in your browser.\n\n"
             "Toolbar:\n"
-            "- 'Sync with Overleaf' contacts Overleaf and updates local metadata.\n"
-            "- 'Reload from disk' re-reads local metadata without any network access.",
+            "- 'Sync with Overleaf' contacts Overleaf and updates the local record of each project status.\n"
+            "- 'Reload from disk' re-reads the OverleafFS file structure and other data (e.g., if changed from another computer).\n\n"
+            "Sync status:\n" + self._sync_status_summary()
+        )
+
+        QMessageBox.information(
+            self,
+            "Overleaf Project Explorer - Help",
+            help_text,
         )
 
     def _on_about(self) -> None:
