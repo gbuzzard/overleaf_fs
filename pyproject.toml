@@ -25,6 +25,16 @@ dependencies = [
     "bs4"
 ]
 
+[project.optional-dependencies]
+test = ["pytest"]
+docs = [
+     "sphinx",
+     "sphinxcontrib-bibtex",
+     "sphinx-book-theme>=1.0.1",
+     "sphinx-design",
+     "sphinx-copybutton"
+]
+
 [tool.setuptools.packages]
 find = {}
 

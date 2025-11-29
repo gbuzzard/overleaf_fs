@@ -1,5 +1,5 @@
 #!/bin/bash
-# This script installs overleaf_file_system from scratch, but there may still be cached packaages.
+# This script installs overleaf_fs from scratch, but there may still be cached packaages.
 # To do a really clean install, first run
 #  source deep_clean_conda.sh
 
