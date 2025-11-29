@@ -23,7 +23,7 @@ In order to download the python code, move to a directory of your choice and run
 
 2. Install the conda environment and package
 
-Clean install using mbirjax/dev_scripts - We provide bash scripts that will do a clean install of ``OverleafFS`` in a new conda environment using the following commands::
+Clean install using overleaf_fs/dev_scripts - We provide bash scripts that will do a clean install of ``OverleafFS`` in a new conda environment using the following commands::
 
     cd dev_scripts
     source clean_install_all.sh
