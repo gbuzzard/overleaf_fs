@@ -97,10 +97,15 @@ class ProjectRecord:
     * The ``local`` part contains only local directory-structure fields
       (folder/notes/pinned/hidden) and is modified only by user actions
       in the GUI or by local configuration; it should be preserved across
-      refreshes.
+      refreshes. If no local entry exists for a given project id, a
+      default ``ProjectLocal()`` is used.
 
     The remote part also includes the ``archived`` boolean field, which
     reflects whether Overleaf marks the project as archived on the server.
+    If a project is removed from Overleaf, it will no longer appear in
+    the projects-info JSON and will therefore be dropped from the
+    in-memory index on the next refresh, regardless of any local
+    metadata.
     """
 
     remote: ProjectRemote
@@ -123,9 +128,7 @@ class ProjectRecord:
 
 
 # Simple in-memory index type: maps project id -> ProjectRecord,
-# which combines remote (projects-info) and local (directory-structure)
-# data for each known project.  The assignment below defines
-# ProjectsIndex as a dict that is restricted so that each key is
-# a str and each value is a ProjectRecord, which includes remote and
-# local info as described above.
+# combining remote (projects-info) and local (directory-structure)
+# data for each known project. This is the merged view that the GUI
+# works with when displaying and organizing projects.
 ProjectsIndex = Dict[str, ProjectRecord]
