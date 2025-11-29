@@ -1664,7 +1664,7 @@ class MainWindow(QMainWindow):
             "About Overleaf File System",
             "Overleaf File System\n\n"
             "GitHub repository:\n"
-            "https://github.com/gbuzzard/overleaf_file_system",
+            "https://github.com/gbuzzard/overleaf_fs",
         )
 
     def _on_refresh(self) -> None:

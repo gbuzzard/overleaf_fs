@@ -7,7 +7,7 @@
 # Update the cluster host names, modules, and jax installation as needed, here and in
 # get_demo_data_server.sh
 #####
-NAME="overleaf_file_system"
+NAME="overleaf_fs"
 GILBRETH="gilbreth"
 NEGISHI="negishi"
 GAUTSCHI="gautschi"

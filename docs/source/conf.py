@@ -60,7 +60,7 @@ autodoc_default_options = {
     'exclude-members': '__init__'
 }
 
-bibtex_bibfiles = ['refs.bib']
+bibtex_bibfiles = []
 
 # autosummary_generate = True
 

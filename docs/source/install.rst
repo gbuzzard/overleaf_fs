@@ -27,5 +27,8 @@ Clean install using overleaf_fs/dev_scripts - We provide bash scripts that will 
 
     cd dev_scripts
     source clean_install_all.sh
+    cd ../overleaf_fs
+    conda activate overleaf_fs
+    python -m app.py
 
 

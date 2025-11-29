@@ -3,10 +3,10 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-OverleafFS: GUI-based project browser for Overleaf
-==================================================
+OverleafFS: GUI-based project browser for Overleaf Projects
+===========================================================
 
-**OverleafFS** is a Python package for managing Overleaf projects in a file-browser GUI.
+**OverleafFS** is a Python package for managing Overleaf (https://www.overleaf.com) projects in a file-browser GUI.
 
 **Key features:**
 
@@ -79,7 +79,6 @@ OverleafFS: GUI-based project browser for Overleaf
    :caption: User Guide
 
    install
-   demos_and_faqs
 
 .. toctree::
    :hidden:
