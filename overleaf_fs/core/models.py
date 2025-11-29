@@ -34,6 +34,12 @@ class ProjectRemote:
     #: particular Overleaf wording or field.
     owner_label: Optional[str] = None
 
+    #: Human-friendly owner name (e.g. "First Last"), if available. This is
+    #: used for display and search in the UI. Unlike ``owner_label`` (which
+    #: is typically the owner's email/login and serves as a stable identifier),
+    #: this field is intended purely for user-facing presentation.
+    owner_display_name: Optional[str] = None
+
     #: Raw "last modified" value as obtained from Overleaf project info,
     #: typically an ISO 8601 timestamp string (e.g.
     #: "2025-11-26T15:48:18.875Z"). Keeping the raw string allows us

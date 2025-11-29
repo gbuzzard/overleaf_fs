@@ -884,7 +884,8 @@ class MainWindow(QMainWindow):
         # Give the Name column a wider default width so that longer
         # project titles are visible without immediate manual resizing.
 
-        header.resizeSection(ProjectTableModel.COLUMN_NAME, 200)
+        header.resizeSection(ProjectTableModel.COLUMN_NAME, 250)
+        header.resizeSection(ProjectTableModel.COLUMN_OWNER, 150)
 
     def _ensure_profile_root_dir(self) -> None:
         """Ensure that the profile root directory has been configured.

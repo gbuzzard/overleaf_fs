@@ -123,6 +123,11 @@ class OverleafProjectDTO:
             At the moment this is typically the owner's email address,
             but it is intentionally kept as a free-form string so we
             are not tightly coupled to a particular field.
+        owner_display_name: Human-friendly owner name suitable for
+            display and searching (for example, "First Last"), if
+            available. This is kept separate from ``owner_label`` so
+            that UI code can use a readable name while still retaining
+            a stable identifier.
         last_modified_iso: ISO 8601 timestamp string for the last
             modified time, or None if not available.
         last_modified_raw: Raw "last modified" value as obtained
@@ -137,9 +142,15 @@ class OverleafProjectDTO:
     name: str
     url: str
     owner_label: str
+    owner_display_name: Optional[str]
     last_modified_iso: Optional[str]
     last_modified_raw: Optional[str]
     archived: bool = False
+
+# NOTE: When adding new fields (for example, ``owner_display_name``),
+# remember to keep OverleafProjectDTO, the projects-info JSON format
+# written by ``_dto_to_metadata_entry``, and the ``ProjectRemote``
+# dataclass in ``models.py`` in sync.
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +380,12 @@ def parse_projects_from_html(html: str) -> List[OverleafProjectDTO]:
                 or str(owner_last)
                 or ""
             ).strip()
+            owner_name_parts = [str(part).strip() for part in (owner_first, owner_last) if str(part).strip()]
+            owner_display_name: Optional[str]
+            if owner_name_parts:
+                owner_display_name = " ".join(owner_name_parts)
+            else:
+                owner_display_name = None
 
             last_iso = entry.get("lastUpdated")
             last_iso_str = str(last_iso) if last_iso is not None else None
@@ -388,6 +405,7 @@ def parse_projects_from_html(html: str) -> List[OverleafProjectDTO]:
                     name=name,
                     url=url,
                     owner_label=owner_label,
+                    owner_display_name=owner_display_name,
                     last_modified_iso=last_iso_str,
                     last_modified_raw=last_raw,
                     archived=archived,
@@ -453,6 +471,7 @@ def _dto_to_metadata_entry(dto: OverleafProjectDTO) -> dict:
         "name": dto.name,
         "url": dto.url,
         "owner_label": dto.owner_label,
+        "owner_display_name": dto.owner_display_name,
         "last_modified": dto.last_modified_iso,
         "last_modified_raw": dto.last_modified_raw,
         "archived": dto.archived,

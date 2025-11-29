@@ -88,6 +88,7 @@ def load_projects_index() -> ProjectsIndex:
                 name=entry["name"],
                 url=entry["url"],
                 owner_label=entry.get("owner_label", ""),
+                owner_display_name=entry.get("owner_display_name"),
                 last_modified_raw=entry.get("last_modified_raw", ""),
                 last_modified=(
                     datetime.fromisoformat(entry["last_modified"])

@@ -145,7 +145,15 @@ class ProjectTableModel(QAbstractTableModel):
             if col == self.COLUMN_NAME:
                 return record.remote.name
             if col == self.COLUMN_OWNER:
-                return record.remote.owner_label or ""
+                display_name = getattr(record.remote, "owner_display_name", None)
+                owner_label = record.remote.owner_label or ""
+                if display_name and owner_label and display_name != owner_label:
+                    # Show both the human-friendly name and the stable label
+                    # (typically email/login), so that both are visible and
+                    # searchable in the table.
+                    return f"{display_name} ({owner_label})"
+                # Fall back to whichever identifier we have.
+                return display_name or owner_label or ""
             if col == self.COLUMN_LAST_MODIFIED:
                 # Prefer the parsed datetime if available; otherwise fall back to the
                 # raw string reported by Overleaf in the remote projects‑info data.
@@ -170,6 +178,42 @@ class ProjectTableModel(QAbstractTableModel):
         if role == Qt.TextAlignmentRole:
             # Left-align text in all columns for now.
             return int(Qt.AlignVCenter | Qt.AlignLeft)
+
+        if role == Qt.ToolTipRole:
+            # Show a multi-line summary of the project when hovering over any cell.
+            remote = record.remote
+            local = record.local
+
+            name = remote.name
+            owner_display = getattr(remote, "owner_display_name", None)
+            owner_label = remote.owner_label or ""
+            if owner_display and owner_label and owner_display != owner_label:
+                owner_str = f"{owner_display} ({owner_label})"
+            else:
+                owner_str = owner_display or owner_label or ""
+
+            # Prefer the parsed datetime for the tooltip as well.
+            if remote.last_modified is not None:
+                last_mod_str = remote.last_modified.isoformat(sep=" ", timespec="seconds")
+            else:
+                last_mod_str = remote.last_modified_raw or ""
+
+            folder = local.folder if local.folder not in (None, "") else "Home"
+            archived_str = "Yes" if getattr(remote, "archived", False) else "No"
+            url = remote.url
+
+            lines = [
+                f"Name: {name}",
+                f"Owner: {owner_str}" if owner_str else "Owner: (unknown)",
+                f"Folder: {folder}",
+            ]
+            if last_mod_str:
+                lines.append(f"Last modified: {last_mod_str}")
+            lines.append(f"Archived: {archived_str}")
+            if url:
+                lines.append(f"URL: {url}")
+
+            return "\n".join(lines)
 
         return None
 
