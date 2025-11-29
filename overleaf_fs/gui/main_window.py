@@ -38,7 +38,7 @@ Core model
 - `ProjectRecord` combines:
     * remote project data (id, name, owner, last_modified, archived, URL),
     * local directory structure (folder assignment, pinned, hidden).
-- `ProjectIndex` holds all project records in-memory.
+- `ProjectsIndex` holds all project records in-memory.
 
 Views and models
 ----------------
@@ -123,9 +123,9 @@ from PySide6.QtWidgets import (
     QStyle,
 )
 
-from overleaf_fs.core.project_index import load_project_index
+from overleaf_fs.core.project_index import load_projects_index
 from overleaf_fs.core.metadata_store import (
-    load_local_state,
+    load_directory_structure,
     create_folder,
     rename_folder,
     delete_folder,
@@ -1263,7 +1263,7 @@ class MainWindow(QMainWindow):
             # Remember whichever folder key we were last told about.
             current_key = getattr(self, "_current_folder_key", ALL_KEY)
 
-            index = load_project_index()
+            index = load_projects_index()
             self._model.set_projects(index)
 
             # Load any previously persisted expanded-folder state so that we
@@ -1289,7 +1289,7 @@ class MainWindow(QMainWindow):
                         _collect_expanded(idx)
 
                 _collect_expanded(QModelIndex())
-            state = load_local_state()
+            state = load_directory_structure()
             folder_paths = set(state.folders)
             for record in index.values():
                 folder = record.local.folder

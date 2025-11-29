@@ -3,7 +3,7 @@ Qt table model for displaying Overleaf projects in a QTableView.
 
 Summary of design:
 - The core data model for projects lives in ``overleaf_fs.core.models`` as
-  ``ProjectRecord`` and ``ProjectIndex``, which cleanly separate
+  ``ProjectRecord`` and ``ProjectsIndex``, which cleanly separate
   "remote" projects‑info fields (mirrored from Overleaf: id, name, owner,
   last modified, URL, archived) from "local" directory‑structure fields
   (folder, notes, pinned, hidden).
@@ -32,7 +32,7 @@ from typing import List, Optional
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor
 
-from overleaf_fs.core.models import ProjectIndex, ProjectRecord
+from overleaf_fs.core.models import ProjectsIndex, ProjectRecord
 
 
 class ProjectTableModel(QAbstractTableModel):
@@ -41,7 +41,7 @@ class ProjectTableModel(QAbstractTableModel):
 
     The model is backed by a flat list of ``ProjectRecord`` instances.
     Higher-level code (e.g. the main window or a controller) is
-    responsible for constructing a ``ProjectIndex`` from the combined
+    responsible for constructing a ``ProjectsIndex`` from the combined
     projects‑info and directory‑structure stores and passing it into this model via :meth:`set_projects`.
 
     Rows correspond to individual projects; columns correspond to
@@ -65,7 +65,7 @@ class ProjectTableModel(QAbstractTableModel):
 
     def __init__(
         self,
-        project_index: Optional[ProjectIndex] = None,
+        project_index: Optional[ProjectsIndex] = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -76,7 +76,7 @@ class ProjectTableModel(QAbstractTableModel):
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def set_projects(self, project_index: ProjectIndex) -> None:
+    def set_projects(self, project_index: ProjectsIndex) -> None:
         """
         Replace the current list of projects with the values from
         ``project_index``.
@@ -88,7 +88,7 @@ class ProjectTableModel(QAbstractTableModel):
         impose a user-facing sorting when attached to a view.
 
         Args:
-            project_index (ProjectIndex): Mapping from project id to
+            project_index (ProjectsIndex): Mapping from project id to
                 ProjectRecord.
         """
         records = list(project_index.values())

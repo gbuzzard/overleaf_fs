@@ -8,7 +8,8 @@ from typing import Dict, List, Optional
 @dataclass
 class ProjectRemote:
     """
-    Fields that mirror what Overleaf reports for a project.
+    Remote (Overleaf-side) fields for a project, as stored in the
+    projects-info JSON file.
 
     These values are populated/updated when we "refresh from Overleaf".
     They should be treated as read-only from the GUI; edits happen on
@@ -53,7 +54,8 @@ class ProjectRemote:
 @dataclass
 class ProjectLocal:
     """
-    Local-only directory-structure fields used by the Overleaf File System.
+    Local-only directory-structure fields used by OverleafFS,
+    as stored in the directory-structure JSON file.
 
     These fields are never pushed back to Overleaf; they represent how
     you choose to organize and annotate projects on your own machine
@@ -80,17 +82,25 @@ class ProjectLocal:
 @dataclass
 class ProjectRecord:
     """
-    Full record for a single Overleaf project, combining remote projects
-    info and local directory-structure fields.
+    In-memory record for a single Overleaf project, combining:
 
-    The ``remote`` part mirrors what Overleaf reports and is overwritten
-    whenever we refresh from Overleaf. The ``local`` part contains only
-    local directory-structure fields (folder/notes/pinned/hidden) and is
-    modified only by user actions in the GUI or by local configuration;
-    it should be preserved across refreshes.
+    * ``remote``: Overleaf-side fields loaded from the projects-info JSON
+      file (``overleaf_projects_info.json``).
+    * ``local``: directory-structure fields loaded from the
+      directory-structure JSON file (``local_directory_structure.json``).
+
+    Conceptually, these two JSON files are merged into a single
+    ``ProjectRecord`` for each project id:
+
+    * The ``remote`` part mirrors what Overleaf reports and is overwritten
+      whenever we refresh from Overleaf.
+    * The ``local`` part contains only local directory-structure fields
+      (folder/notes/pinned/hidden) and is modified only by user actions
+      in the GUI or by local configuration; it should be preserved across
+      refreshes.
 
     The remote part also includes the ``archived`` boolean field, which
-    reflects whether Overleaf marks the project as archived.
+    reflects whether Overleaf marks the project as archived on the server.
     """
 
     remote: ProjectRemote
@@ -112,5 +122,10 @@ class ProjectRecord:
         return self.remote.url
 
 
-# Simple in-memory index type: maps project id -> project record.
-ProjectIndex = Dict[str, ProjectRecord]
+# Simple in-memory index type: maps project id -> ProjectRecord,
+# which combines remote (projects-info) and local (directory-structure)
+# data for each known project.  The assignment below defines
+# ProjectsIndex as a dict that is restricted so that each key is
+# a str and each value is a ProjectRecord, which includes remote and
+# local info as described above.
+ProjectsIndex = Dict[str, ProjectRecord]
