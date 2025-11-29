@@ -52,7 +52,8 @@ if WEBENGINE_AVAILABLE:
         string assembled from the cookies set by the Overleaf site in
         the embedded browser. The caller can then pass this header to
         :func:`sync_overleaf_projects_for_active_profile` and optionally
-        persist it in the profile metadata.
+        persist it in the profile data directory under the filename
+        given in config.COOKIE_FILENAME: overleaf_cookie.json.
         """
 
         def __init__(self, parent=None) -> None:

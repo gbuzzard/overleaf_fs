@@ -41,11 +41,13 @@ A typical layout might look like::
 
     /path/to/profile_root_dir/
         primary/
-            overleaf_projects_info.json
             local_directory_structure.json
+            overleaf_cookie.json
+            overleaf_projects_info.json
         ornl/
-            overleaf_projects_info.json
             local_directory_structure.json
+            overleaf_cookie.json
+            overleaf_projects_info.json
 
 where ``/path/to/profile_root_dir`` is either a local directory or a
 cloud-synced directory (e.g. on Dropbox or iCloud) chosen by the
@@ -102,6 +104,10 @@ DEFAULT_PROFILE_CONFIG_FILENAME = "profile_config.json"
 # be overridden per profile (for example, to support institution-hosted
 # Overleaf instances such as an ORNL deployment).
 DEFAULT_OVERLEAF_BASE_URL = "https://www.overleaf.com"
+
+# Name of the JSON file where we optionally store a browser-derived
+# cookie header for the active profile.
+COOKIE_FILENAME = "overleaf_cookie.json"
 
 
 @dataclass

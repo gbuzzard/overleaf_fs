@@ -905,19 +905,24 @@ class MainWindow(QMainWindow):
 
         # Default suggestion: a subdirectory under the user's home
         # directory. The user is free to pick any path (e.g. a cloud
-        # drive folder) to make metadata available across machines.
+        # drive folder) to make OverleafFS data available across machines.
         default_dir = str((Path.home() / "overleaf_fs_profiles").expanduser())
 
         # Explain what this choice means so the file picker is not a
         # surprise on first startup.
         QMessageBox.information(
             self,
-            "Choose profile storage location",
-            "OverleafFS stores local metadata (profiles, folders, and other\n"
-            "settings) in a directory on your machine.\n\n"
-            "Recommendation: choose a folder in a cloud-synced location\n"
-            "(e.g. Dropbox, OneDrive, iCloud) if you want to share the same\n"
-            "profiles across multiple computers.",
+            "Choose a directory to hold one or more profiles",
+            "OverleafFS can manage multiple Overleaf accounts with a separate "
+            "profile for each, all stored under a common profile root directory, "
+            "which you can select here.\n\n"
+            "A typical root choice is 'overleaf_fs_profiles', which would then be used "
+            "to hold subdirectories such as 'primary' and 'personal' created by "
+            "OverleafFS after you authenticate to each Overleaf account.\n\n"
+            "Recommendation: choose a folder in a cloud-synced location "
+            "(e.g. Dropbox, OneDrive, iCloud) if you want to share the same "
+            "profiles across multiple computers.  If you've created a cloud-based "
+            "folder on another machine, choose it here to share."
         )
 
         dialog = QFileDialog(

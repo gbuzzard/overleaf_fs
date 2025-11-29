@@ -61,12 +61,13 @@ import requests
 from bs4 import BeautifulSoup  # type: ignore[import]
 
 from overleaf_fs.core import config
-from overleaf_fs.core.config import get_projects_info_path, get_overleaf_base_url
+from overleaf_fs.core.config import get_projects_info_path, get_overleaf_base_url, COOKIE_FILENAME
 
 
 LOGGER = logging.getLogger(__name__)
 
 DASHBOARD_PATH = "/project"
+
 
 def _get_overleaf_base_url() -> str:
     """Return the normalized Overleaf base URL for the active profile.
@@ -95,11 +96,6 @@ def _get_overleaf_host() -> str:
     parsed = urlparse(base)
     host = parsed.hostname or "www.overleaf.com"
     return host
-
-
-# Name of the JSON file where we optionally store a browser-derived
-# cookie header for the active profile.
-COOKIE_FILENAME = "overleaf_cookie.json"
 
 
 class CookieRequiredError(ValueError):
