@@ -109,6 +109,9 @@ DEFAULT_OVERLEAF_BASE_URL = "https://www.overleaf.com"
 # cookie header for the active profile.
 COOKIE_FILENAME = "overleaf_cookie.json"
 
+# Version information
+FILE_FORMAT_VERSION = 1
+
 
 @dataclass
 class ProfileConfig:

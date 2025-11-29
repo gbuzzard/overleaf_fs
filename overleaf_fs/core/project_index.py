@@ -26,7 +26,6 @@ while local fields persist across refreshes.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict
 
 from overleaf_fs.core.models import (
     ProjectRemote,
@@ -35,11 +34,7 @@ from overleaf_fs.core.models import (
     ProjectsIndex,
 )
 
-from overleaf_fs.core.metadata_store import (
-    load_directory_structure,
-    save_directory_structure,
-    LocalState
-)
+from overleaf_fs.core.metadata_store import load_directory_structure
 
 from overleaf_fs.core.config import get_projects_info_path
 import json
@@ -119,19 +114,3 @@ def load_projects_index() -> ProjectsIndex:
         index[remote.id] = ProjectRecord(remote=remote, local=local)
 
     return index
-
-
-def save_project_index(index: ProjectsIndex) -> None:
-    """
-    Persist the local directory‑structure portion of the project index to
-    the profile's directory‑structure JSON file. Remote project info is
-    never written locally.
-    """
-    local = {proj_id: rec.local for proj_id, rec in index.items()}
-
-    existing = load_directory_structure()
-    new_state = LocalState(
-        folders=list(existing.folders),
-        projects=dict(local),
-    )
-    save_directory_structure(new_state)

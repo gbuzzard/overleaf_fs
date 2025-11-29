@@ -35,10 +35,11 @@ and stable:
           "hidden": false
         }
       },
-      "version": 1,
+      "version": 1
     }
-Note that the entry "" for "folder" indicates the top level directory,
-"Home/", which is prepended to all folders.  E.g., "CT" maps to "Home/CT".
+In the per-project metadata, the empty string ``""`` for ``"folder"``
+indicates the top-level Home directory. For example, a project whose
+folder is stored as ``"CT"`` will appear under ``"Home/CT"`` in the GUI.
 Only the local fields are stored. The remote projects info is refreshed
 from Overleaf (or, currently, from dummy data) and merged with this
 local directory-structure data into ``ProjectRecord`` instances
@@ -145,8 +146,9 @@ class LocalState:
     Attributes:
         folders: Explicit list of folder paths known to the application, such
             as "CT" or "Teaching/2025". This allows empty folders to be
-            persisted even if no project currently resides in them.
-            The Home folder is represented by the empty string "".
+            persisted even if no project currently resides in them. The Home
+            folder is implicit and is not stored in this list; it is
+            represented by the empty string ``""`` in ``ProjectLocal.folder``.
         projects: Mapping from project id to ``ProjectLocal`` describing the
             local per‑project directory-structure fields (folder/notes/pinned/hidden)
             for each known project.
@@ -185,6 +187,8 @@ def _decode_state(raw: Mapping) -> LocalState:
     folders: List[str] = []
     if isinstance(folders_raw, list):
         for entry in folders_raw:
+            # Ignore empty-string entries: the Home folder is implicit and
+            # represented by "" in ProjectLocal.folder, not in LocalState.folders.
             if isinstance(entry, str) and entry:
                 folders.append(entry)
 
@@ -242,7 +246,7 @@ def save_directory_structure(state: LocalState, path: Optional[Path] = None) -> 
         metadata_file.parent.mkdir(parents=True, exist_ok=True)
 
     data = {
-        "version": 1,
+        "version": config.FILE_FORMAT_VERSION,
         "folders": list(state.folders),
         "projects": {
             proj_id: _project_local_to_dict(local)
