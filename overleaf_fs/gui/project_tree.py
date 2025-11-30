@@ -6,7 +6,7 @@ Design
 The project tree shows a Finder-like folder hierarchy on the left side
 of the GUI. It is not derived from Overleaf; it reflects only the local
 organizational structure stored in the directory-structure store
-(``metadata_store`` module):
+(``directory_structure_store`` module):
 
 - Special nodes:
     * All Projects
@@ -336,7 +336,7 @@ class ProjectTree(QTreeView):
         The tree itself does not directly modify the directory-structure
         data; instead it emits high-level signals that a controller
         (e.g. MainWindow) can handle by updating the local directory-
-        structure (``LocalDirectoryStructure``) via ``metadata_store``.
+        structure (``LocalDirectoryStructure``) via ``directory_structure_store``.
         """
         index = self.indexAt(event.pos())
         item = self._model.itemFromIndex(index) if index.isValid() else None
@@ -471,7 +471,7 @@ class ProjectTree(QTreeView):
         simply parses the project ids from the mime data and emits a
         high-level signal that a controller (e.g. MainWindow) can handle
         by updating the local directory-structure state via
-        ``metadata_store``.
+        ``directory_structure_store``.
         """
         # Clear any visual drop highlight and pending auto-expand now
         # that the drop is complete.

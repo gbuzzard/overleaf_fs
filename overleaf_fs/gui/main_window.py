@@ -513,7 +513,7 @@ class MainWindow(QMainWindow):
         # the directory structure or the overleaf project data.
         sel_model = self._table.selectionModel()
         if sel_model:
-            sel_model.selectionChanged.connect(lambda *_: self._check_external_metadata_change())
+            sel_model.selectionChanged.connect(lambda *_: self._check_external_file_change())
 
         # Connect double-click to "open project in browser".
         self._table.doubleClicked.connect(self._on_table_double_clicked)
@@ -532,7 +532,7 @@ class MainWindow(QMainWindow):
         self._cached_mtime_projects_info_json = None
 
         # Guard flag to temporarily disable external-change checks during
-        # internal reloads (e.g., after a sync or metadata edit).
+        # internal reloads (e.g., after a sync).
         self._suspend_external_change_checks = False
 
         # Folder tree on the left.
@@ -661,12 +661,12 @@ class MainWindow(QMainWindow):
 
         # Include the active profile folder so users can see which
         # profile/location is currently in use.
-        root = get_profile_root_dir_optional()
-        if root is not None:
+        current_root = get_profile_root_dir_optional()
+        if current_root is not None:
             try:
-                root_str = str(root.expanduser().resolve())
+                root_str = str(current_root.expanduser().resolve())
             except Exception:
-                root_str = str(root)
+                root_str = str(current_root)
         else:
             root_str = "not configured"
 
@@ -797,7 +797,7 @@ class MainWindow(QMainWindow):
 
         return super().eventFilter(obj, event)
 
-    def _update_cached_metadata_mtimes(self) -> None:
+    def _update_local_file_mtimes(self) -> None:
         """Refresh cached mtimes for the projects-info and directory-structure JSON files.
 
         This is called after we load or reload data from disk so that
@@ -805,14 +805,14 @@ class MainWindow(QMainWindow):
         happened outside this process.
         """
         try:
-            state_dir = get_active_profile_data_dir()
+            active_profile_dir = get_active_profile_data_dir()
         except RuntimeError:
             # No active profile configured yet; nothing to cache.
             return
 
         for path, attr in (
-            (state_dir / DEFAULT_DIRECTORY_STRUCTURE_FILENAME, "_cached_mtime_directory_structure_json"),
-            (state_dir / DEFAULT_PROJECTS_INFO_FILENAME, "_cached_mtime_projects_info_json"),
+            (active_profile_dir / DEFAULT_DIRECTORY_STRUCTURE_FILENAME, "_cached_mtime_directory_structure_json"),
+            (active_profile_dir / DEFAULT_PROJECTS_INFO_FILENAME, "_cached_mtime_projects_info_json"),
         ):
             if path.exists():
                 try:
@@ -823,7 +823,7 @@ class MainWindow(QMainWindow):
                 mtime = None
             setattr(self, attr, mtime)
 
-    def _check_external_metadata_change(self) -> bool:
+    def _check_external_file_change(self) -> bool:
         """Return True if on-disk projects/structure changed and user approves a reload."""
         if getattr(self, "_suspend_external_change_checks", False):
             return False
@@ -831,18 +831,18 @@ class MainWindow(QMainWindow):
             # Look in the active profile's data directory, which is
             # where local_directory_structure.json (directory-structure data)
             # and overleaf_projects_info.json (cached projects info) live.
-            state_dir = get_active_profile_data_dir()
+            active_profile_dir = get_active_profile_data_dir()
         except RuntimeError:
             # No active profile configured yet; nothing to check.
             return False
 
-        state_path = state_dir / DEFAULT_DIRECTORY_STRUCTURE_FILENAME
-        projects_path = state_dir / DEFAULT_PROJECTS_INFO_FILENAME
+        dir_struct_path = active_profile_dir / DEFAULT_DIRECTORY_STRUCTURE_FILENAME
+        projects_info_path = active_profile_dir / DEFAULT_PROJECTS_INFO_FILENAME
 
         changed = False
         for p, attr in (
-            (state_path, "_cached_mtime_directory_structure_json"),
-            (projects_path, "_cached_mtime_projects_info_json"),
+            (dir_struct_path, "_cached_mtime_directory_structure_json"),
+            (projects_info_path, "_cached_mtime_projects_info_json"),
         ):
             if p.exists():
                 mtime = p.stat().st_mtime
@@ -900,8 +900,8 @@ class MainWindow(QMainWindow):
         configuration, projects-info, and directory-structure helpers,
         along with the scraper code, to locate profile-specific data.
         """
-        root = get_profile_root_dir_optional()
-        if root is not None:
+        current_root = get_profile_root_dir_optional()
+        if current_root is not None:
             return
 
         # Default suggestion: a subdirectory under the user's home
@@ -1077,7 +1077,7 @@ class MainWindow(QMainWindow):
     def _load_expanded_folder_keys(self) -> list[str]:
         """Return the list of folder keys that were expanded last session.
 
-        This uses ``QSettings`` to persist the expanded state across
+        This uses ``QSettings`` to persist the expanded tree state across
         application restarts. The keys correspond to the values stored
         in ``FolderPathRole`` for tree items (e.g. "CT", "Grants/Ptychography").
         """
@@ -1090,7 +1090,7 @@ class MainWindow(QMainWindow):
         """Persist the list of expanded folder keys via ``QSettings``.
 
         This is invoked after rebuilding the tree so that the current
-        expansion state can be restored on the next restart.
+        expansion tree state can be restored on the next restart.
         """
         self._settings.setValue("expanded_folders", list(keys))
 
@@ -1128,7 +1128,7 @@ class MainWindow(QMainWindow):
         checks whether the on-disk projects-info or directory-structure
         data changed externally and, if so, offers to reload from disk.
         """
-        self._check_external_metadata_change()
+        self._check_external_file_change()
         self._update_persisted_expanded_folders()
 
     def _on_tree_collapsed(self, index: QModelIndex) -> None:
@@ -1138,7 +1138,7 @@ class MainWindow(QMainWindow):
         checks whether the on-disk projects-info or directory-structure
         data changed externally and, if so, offers to reload from disk.
         """
-        self._check_external_metadata_change()
+        self._check_external_file_change()
         self._update_persisted_expanded_folders()
 
     def _create_actions(self) -> None:
@@ -1156,7 +1156,6 @@ class MainWindow(QMainWindow):
         # to refresh the view when only local folder assignments or
         # other local organization have changed.
         self._reload_action = QAction("Reload from disk", self)
-        # self._reload_action.setStatusTip("Reload projects from local metadata (no network)")
         self._reload_action.setToolTip("Reload directory structure from disk (e.g., if changed from another computer)")
         self._reload_action.setShortcut("Ctrl+R")
         self._reload_action.triggered.connect(self._on_reload_from_disk)
@@ -1166,7 +1165,6 @@ class MainWindow(QMainWindow):
         # (prompting if needed), update the on-disk projects info, and
         # then reload the view.
         self._sync_action = QAction("Sync with Overleaf", self)
-        # self._sync_action.setStatusTip("Synchronize project list with Overleaf and reload")
         self._sync_action.setToolTip("Synchronize project list with Overleaf and reload")
         self._sync_action.setShortcut("Ctrl+Shift+R")
         self._sync_action.triggered.connect(self._on_sync_with_overleaf)
@@ -1174,7 +1172,6 @@ class MainWindow(QMainWindow):
 
         # Open the Overleaf projects dashboard in the default browser.
         self._open_dashboard_action = QAction("Open Overleaf dashboard", self)
-        # self._open_dashboard_action.setStatusTip("Open the Overleaf projects page in your browser")
         self._open_dashboard_action.setToolTip("Open the Overleaf projects page in your browser")
         self._open_dashboard_action.triggered.connect(self._on_open_overleaf_dashboard)
 
@@ -1182,20 +1179,17 @@ class MainWindow(QMainWindow):
         # data directory to a new folder (e.g. a different cloud-synced
         # location).
         self._change_profile_location_action = QAction("Change profile folder…", self)
-        # self._change_profile_location_action.setStatusTip("Choose a new directory for OverleafFS profiles")
         self._change_profile_location_action.setToolTip("Choose a new directory for OverleafFS profiles")
         self._change_profile_location_action.triggered.connect(self._on_change_profile_location)
 
         # Help: brief overview of basic interactions in the GUI.
         self._help_action = QAction("Help", self)
-        # self._help_action.setStatusTip("Show basic usage help for Overleaf File System")
         self._help_action.setToolTip("Show basic usage and status for Overleaf File System")
         self._help_action.triggered.connect(self._on_help)
 
         # About: show information about this application and its home
         # on GitHub.
         self._about_action = QAction("About", self)
-        # self._about_action.setStatusTip("About Overleaf File System")
         self._about_action.setToolTip("About Overleaf File System")
         self._about_action.triggered.connect(self._on_about)
 
@@ -1290,8 +1284,8 @@ class MainWindow(QMainWindow):
                         _collect_expanded(idx)
 
                 _collect_expanded(QModelIndex())
-            state = load_directory_structure()
-            folder_paths = set(state.folders)
+            loc_dir_struct = load_directory_structure()
+            folder_paths = set(loc_dir_struct.folders)
             for record in index.values():
                 folder = record.local.folder
                 if folder:
@@ -1301,7 +1295,7 @@ class MainWindow(QMainWindow):
 
             # Restore expanded folders based on the keys we captured before
             # rebuilding the tree, or fall back to any persisted keys from
-            # the previous session when there is no current-session state
+            # the previous session when there is no current-session tree state
             # (e.g. the first load after startup).
             tree_model = self._tree.model()
             union_expanded_keys = expanded_keys or persisted_expanded_keys
@@ -1336,9 +1330,9 @@ class MainWindow(QMainWindow):
                 status.showMessage(f"Loaded {len(index)} projects", 3000)
 
             # After a successful load, refresh the cached mtimes so that
-            # external-change detection only triggers on changes that
+            # external-change detection triggers only on changes that
             # occur outside this process.
-            self._update_cached_metadata_mtimes()
+            self._update_local_file_mtimes()
         finally:
             # Re-enable external-change checks after the internal reload
             # has completed and the cached mtimes have been updated.
@@ -1579,7 +1573,7 @@ class MainWindow(QMainWindow):
         # Otherwise, if there is an existing profile root and it differs
         # from the newly chosen root, attempt to move the existing
         # profile files into the new location so that cookies, project
-        # metadata, and other state are preserved.
+        # info, directory structure, and other local data are preserved.
         if (
             current_root is not None
             and current_root.exists()
@@ -1786,7 +1780,7 @@ class MainWindow(QMainWindow):
         (e.g., due to edits on this or another machine) and, if so,
         offers to reload from disk.
         """
-        self._check_external_metadata_change()
+        self._check_external_file_change()
         # Proceed normally regardless; reload already applied if chosen.
         if not isinstance(key, (str, type(None))):
             return
@@ -1808,7 +1802,7 @@ class MainWindow(QMainWindow):
         if so, offers to reload from disk. Finally reloads the project
         index and folder tree.
         """
-        self._check_external_metadata_change()
+        self._check_external_file_change()
         if not isinstance(parent_path, (str, type(None))):
             return
 
@@ -1863,7 +1857,7 @@ class MainWindow(QMainWindow):
         on-disk projects-info or directory-structure data changed
         externally and, if so, offers to reload from disk.
         """
-        self._check_external_metadata_change()
+        self._check_external_file_change()
         if not isinstance(folder_path, str) or not folder_path:
             return
 
@@ -1925,7 +1919,7 @@ class MainWindow(QMainWindow):
         on-disk projects-info or directory-structure data changed
         externally and, if so, offers to reload from disk.
         """
-        self._check_external_metadata_change()
+        self._check_external_file_change()
         if not isinstance(folder_path, str) or not folder_path:
             return
 
@@ -1972,14 +1966,14 @@ class MainWindow(QMainWindow):
         the on-disk projects-info or directory-structure data changed
         externally and, if so, offers to reload from disk.
         """
-        self._check_external_metadata_change()
+        self._check_external_file_change()
         if not isinstance(project_ids, list):
             return
         if not all(isinstance(pid, str) for pid in project_ids):
             return
 
         # folder_path may be "" (Home) or a real folder string, or None
-        # (treated like Home by the metadata helper).
+        # (treated like Home).
         if not isinstance(folder_path, (str, type(None))):
             return
 
@@ -2008,7 +2002,7 @@ class MainWindow(QMainWindow):
         """
         # Check for external changes (e.g. edits from another machine)
         # before acting on the current selection.
-        self._check_external_metadata_change()
+        self._check_external_file_change()
 
         if not index.isValid():
             return
@@ -2043,7 +2037,7 @@ class MainWindow(QMainWindow):
         """
         # Check for external changes (e.g. edits from another machine)
         # before acting on the current selection.
-        self._check_external_metadata_change()
+        self._check_external_file_change()
 
         # Map the proxy index back to the source row in the underlying model.
         source_index = self._proxy.mapToSource(index)

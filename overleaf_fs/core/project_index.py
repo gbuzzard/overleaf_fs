@@ -43,8 +43,8 @@ import logging
 
 def load_projects_index() -> ProjectsIndex:
     """
-    Load and merge remote Overleaf project metadata with local
-    directory‑structure metadata to produce a unified ``ProjectsIndex``.
+    Load and merge remote Overleaf projects‑info data with local
+    directory‑structure data to produce a unified ``ProjectsIndex``.
 
     This function reads:
 
@@ -56,12 +56,16 @@ def load_projects_index() -> ProjectsIndex:
     For each project id appearing in the projects‑info file, a
     ``ProjectRecord`` is created. The ``remote`` portion is populated from
     the projects‑info JSON entry; the ``local`` portion is looked up in the
-    directory‑structure metadata (or created empty via ``ProjectLocal()`` if
+    directory‑structure data (or created empty via ``ProjectLocal()`` if
     absent).
 
     Remote fields are authoritative and overwritten whenever the projects‑info
     file is refreshed from Overleaf. Local fields persist across refreshes and
-    represent machine‑local organization.
+    represent machine‑local organization and folder layout.
+
+    If the projects‑info JSON file is missing or cannot be parsed, an empty
+    ``ProjectsIndex`` is returned. The caller may then trigger a fresh sync from
+    Overleaf to regenerate the projects‑info file.
 
     Returns:
         A ``ProjectsIndex`` mapping project ids to merged ``ProjectRecord``
@@ -69,19 +73,22 @@ def load_projects_index() -> ProjectsIndex:
     """
     index: ProjectsIndex = {}
 
-    # Load local directory‑structure fields (folder, notes, pinned, hidden)
-    state = load_directory_structure()
-    local_meta = state.projects
+    # Load local directory‑structure data (folder, notes, pinned, hidden)
+    directory_structure = load_directory_structure()
+    local_projects = directory_structure.projects
 
-    # Load remote projects info from the profile's projects‑info file
+    # Load remote projects info from the profile's projects‑info JSON file.
     projects_info_path = get_projects_info_path()
     try:
-        raw = projects_info_path.read_text(encoding='utf-8')
-        remote_entries = json.loads(raw)
+        raw = projects_info_path.read_text(encoding="utf-8")
+        projects_info_entries = json.loads(raw)
     except Exception:
-        remote_entries = []
+        # If the projects-info file is missing or malformed, fall back to an
+        # empty index rather than raising. The user can trigger a fresh sync
+        # from Overleaf to regenerate this file.
+        projects_info_entries = []
 
-    for entry in remote_entries:
+    for entry in projects_info_entries:
         try:
             remote = ProjectRemote(
                 id=entry["id"],
@@ -111,7 +118,7 @@ def load_projects_index() -> ProjectsIndex:
             # from Overleaf, and retry loading the projects index.
             continue
 
-        local = local_meta.get(remote.id, ProjectLocal())
+        local = local_projects.get(remote.id, ProjectLocal())
         index[remote.id] = ProjectRecord(remote=remote, local=local)
 
     return index

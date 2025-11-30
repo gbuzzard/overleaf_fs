@@ -4,7 +4,7 @@ Configuration helpers for the Overleaf File System.
 New requirement
 ---------------
 On a clean startup, the application should prompt the user to select the
-profile root directory before loading any state. This allows the user to
+profile root directory before loading any profile data from disk. This allows the user to
 choose a custom location (e.g., a cloud-synced folder) for storing profile
 data. Until the user makes this choice, the profile root directory remains
 unset, and the GUI must handle prompting the user.
@@ -25,7 +25,7 @@ conda (``~/.conda``). For this application we use
 
 as the bootstrap directory. Inside that directory we keep a small
 JSON configuration file (``config.json``) that describes where the
-actual profile state directories live and which profile is currently
+actual profile data directories live and which profile is currently
 active.
 
 Each profile represents a local view of one Overleaf account (or
@@ -56,7 +56,7 @@ and the set of defined profiles, and it records which profile was
 last active so we can reopen it by default on the next launch.
 
 For now, this module initializes a single "Primary" profile and
-stores all state under a default profile root directory inside
+stores all profile data under a default profile root directory inside
 ``~/.overleaf_fs``. The rest of the application should always obtain
 paths via the helpers in this module so that future additions such
 as profile switching or a profile picker UI do not require changes
@@ -76,7 +76,7 @@ from typing import Any, Dict, Optional
 # Name of the per-user "bootstrap" directory under the home directory.
 # This directory holds only lightweight configuration for the Overleaf
 # File System (e.g. config.json) and is not intended to contain
-# large state files directly.
+# large data files directly.
 APP_DIR_NAME = ".overleaf_fs"
 
 # Name of the JSON configuration file inside the bootstrap directory.
@@ -117,7 +117,7 @@ FILE_FORMAT_VERSION = 1
 class ProfileConfig:
     """Configuration for a single profile.
 
-    This describes where the profile's state lives relative to the
+    This describes where the profile's data files live relative to the
     shared profile root directory and which human-readable name should
     be shown in the UI.
 
@@ -146,7 +146,7 @@ def get_bootstrap_dir() -> Path:
 
     This directory is always local to the current machine (typically
     ``~/.overleaf_fs``) and is used to store lightweight configuration
-    files such as ``config.json``. The actual profile state (overleaf project
+    files such as ``config.json``. The actual profile data (overleaf project
     info, local directory structure, etc.) may live in a different directory
     chosen by the user, for example inside a cloud-synced folder.
 
@@ -293,7 +293,7 @@ def get_profile_root_dir() -> Path:
 
     This is typically configured to point at a directory that can be
     shared across machines (e.g. a Dropbox or iCloud folder). Each
-    profile then uses a subdirectory of this root for its own state.
+    profile then uses a subdirectory of this root for its own data files.
 
     Returns:
         Path to the profile root directory.
@@ -351,14 +351,14 @@ def get_active_profile_data_dir() -> Path:
     The directory is created if it does not already exist.
 
     Returns:
-        Path to the active profile's state directory.
+        Path to the active profile's data directory.
     """
 
-    root = get_profile_root_dir()
+    current_root = get_profile_root_dir()
     profile_cfg = get_active_profile_config()
-    state_dir = root / profile_cfg.relative_path
-    state_dir.mkdir(parents=True, exist_ok=True)
-    return state_dir
+    data_dir = current_root / profile_cfg.relative_path
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
 
 
 def get_projects_info_path() -> Path:

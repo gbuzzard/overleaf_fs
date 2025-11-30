@@ -12,7 +12,7 @@ It is built around two key ideas:
   scraping and project URLs are derived from this base URL.
 * Authentication uses a browser-style session cookie (typically the
   ``overleaf_session2`` cookie) so that we can reuse the same login
-  state as the user's normal browser.
+  credentials as the user's normal browser.
 
 There are two ways for GUI code to obtain the cookie header used by the
 functions in this module:
@@ -28,8 +28,8 @@ functions in this module:
    that header into the GUI.
 
 To avoid forcing the user to supply the cookie on every sync, we
-optionally store the raw Cookie header in a small JSON file under the
-active profile's state directory. This file contains only the cookie
+optionally store the raw Cookie header in a small JSON file in the
+active profile's directory. This file contains only the cookie
 header and a timestamp. The GUI is responsible for asking the user
 whether they consent to saving the cookie locally.
 
@@ -149,7 +149,7 @@ class OverleafProjectDTO:
 
 # NOTE: When adding new fields (for example, ``owner_display_name``),
 # remember to keep OverleafProjectDTO, the projects-info JSON format
-# written by ``_dto_to_metadata_entry``, and the ``ProjectRemote``
+# written by ``_dto_to_projects_info_entry``, and the ``ProjectRemote``
 # dataclass in ``models.py`` in sync.
 
 
@@ -164,8 +164,8 @@ def _get_cookie_path() -> Path:
     Returns:
         Path to the cookie file in the active profile's data directory.
     """
-    state_dir = config.get_active_profile_data_dir()
-    return state_dir / COOKIE_FILENAME
+    active_profile_dir = config.get_active_profile_data_dir()
+    return active_profile_dir / COOKIE_FILENAME
 
 
 def load_saved_cookie_header() -> Optional[str]:
@@ -456,7 +456,7 @@ def scrape_overleaf_projects(session: requests.Session) -> List[OverleafProjectD
 # ---------------------------------------------------------------------------
 
 
-def _dto_to_metadata_entry(dto: OverleafProjectDTO) -> dict:
+def _dto_to_projects_info_entry(dto: OverleafProjectDTO) -> dict:
     """Convert a DTO into the projects-info JSON entry format used by project_index.
 
     Args:
@@ -478,7 +478,7 @@ def _dto_to_metadata_entry(dto: OverleafProjectDTO) -> dict:
     }
 
 
-def write_overleaf_metadata(projects: Iterable[OverleafProjectDTO]) -> Path:
+def write_projects_info(projects: Iterable[OverleafProjectDTO]) -> Path:
     """Write the given projects into the profile's projects-info JSON file.
 
     Args:
@@ -488,7 +488,7 @@ def write_overleaf_metadata(projects: Iterable[OverleafProjectDTO]) -> Path:
         Path to the projects-info file that was written.
     """
     projects_info_path = get_projects_info_path()
-    payload = [_dto_to_metadata_entry(dto) for dto in projects]
+    payload = [_dto_to_projects_info_entry(dto) for dto in projects]
     projects_info_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
     )
@@ -546,7 +546,7 @@ def refresh_projects_with_cookie(
             "current cookie. The cookie may be expired or invalid."
         ) from exc
 
-    write_overleaf_metadata(projects)
+    write_projects_info(projects)
 
     if remember_cookie:
         save_cookie_header(cookie_header)
@@ -704,7 +704,7 @@ if __name__ == "__main__":  # pragma: no cover - manual test harness
         print(f"Error while scraping Overleaf projects: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    payload = [_dto_to_metadata_entry(dto) for dto in projects]
+    payload = [_dto_to_projects_info_entry(dto) for dto in projects]
 
     output_path = Path(args.output)
     try:
