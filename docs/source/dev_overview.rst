@@ -1,8 +1,8 @@
 
 
-======================
-Developer maintenance
-======================
+==================
+Developer Overview
+==================
 
 This document provides a high-level overview of the main modules in the
 ``overleaf_fs`` package and their responsibilities. It is intended as a

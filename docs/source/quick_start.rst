@@ -1,6 +1,9 @@
 Quick Start
 ===========
 
+Before continuing, make sure you have installed OverleafFS. See
+:doc:`install` for installation instructions.
+
 1. Launch the app using ``python -m overleaf_fs`` or your installed shortcut.
 2. When prompted, choose a root directory where OverleafFS will store all of your profiles.
 3. Log in to Overleaf through the embedded browser:

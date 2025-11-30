@@ -3,9 +3,7 @@ Credits
 
 **OverleafFS Development Team**
 
-The OverleafFS Development Team is listed below in alphabetical order:
-
-    Gregery T. Buzzard.
+The primary OverleafFS contributor is Gregery T. Buzzard.
 
 **ChatGPT acknowledgement**
 
@@ -18,8 +16,8 @@ Please use the following Bibtex citation when referencing this software.
 
     @Misc {overleaffs-2025,
     author = {Gregery T. Buzzard},
-    title =	{{OverleafFS}: {GUI}-based file system for latex projects},
-    howpublished = {Software library available from \url{https://github.com/gbuzzard/overleaf_file_system}},
+    title =	{{OverleafFS}: {GUI}-based file system for {L}a{T}e{X} projects},
+    howpublished = {Software library available from \url{https://github.com/gbuzzard/overleaf_fs}},
     year = 2025
     }
 

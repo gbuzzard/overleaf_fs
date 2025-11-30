@@ -1,7 +1,7 @@
 OverleafFS: GUI-based project browser for Overleaf Projects
 ===========================================================
 
-**OverleafFS** is a Python package for managing Overleaf projects in a file-browser GUI.
+**OverleafFS** (Overleaf File System) is a Python package for managing Overleaf (https://www.overleaf.com/) LaTeX projects in a file-browser GUI.
 
 **Key features:**
 

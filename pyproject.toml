@@ -7,7 +7,7 @@ name = "overleaf_file_system"
 version = "0.0.1"
 description = "GUI-based project organization for Overleaf"
 keywords = ["overleaf", "file system"]
-readme = "README.md"
+readme = "README.rst"
 license = { file = "LICENSE" }
 authors = [
     { name = "Greg Buzzard", email = "buzzard@purdue.edu" }
@@ -33,6 +33,13 @@ docs = [
      "sphinx-book-theme>=1.0.1",
      "sphinx-design",
      "sphinx-copybutton"
+]
+dev = [
+    "setuptools",
+    "build",
+    "wheel",
+    "twine",
+    "pkginfo"
 ]
 
 [tool.setuptools.packages]

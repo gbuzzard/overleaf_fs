@@ -1,12 +1,7 @@
-.. overleaf_fs documentation master file, created by
-   sphinx-quickstart on Fri Jun 25 14:24:26 2021.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
-
 OverleafFS: GUI-based project browser for Overleaf Projects
 ===========================================================
 
-**OverleafFS** is a Python package for managing Overleaf (https://www.overleaf.com) projects in a file-browser GUI.
+**OverleafFS** (Overleaf File System) is a Python package for managing Overleaf (https://www.overleaf.com/) LaTeX projects in a file-browser GUI.
 
 **Key features:**
 
@@ -54,13 +49,13 @@ OverleafFS: GUI-based project browser for Overleaf Projects
     .. grid-item-card:: :material-regular:`library_books;2em` User Guides
       :class-card: user-guides
       :columns: 12 6 6 4
-      :link: install
+      :link: features
       :link-type: doc
 
     .. grid-item-card:: :material-regular:`laptop_chromebook;2em` Developer Docs
       :class-card: developer-docs
       :columns: 12 6 6 4
-      :link: dev_maintenance
+      :link: dev_overview
       :link-type: doc
 
 
@@ -78,6 +73,7 @@ OverleafFS: GUI-based project browser for Overleaf Projects
    :maxdepth: 4
    :caption: User Guide
 
+   features
    install
 
 .. toctree::
@@ -85,5 +81,5 @@ OverleafFS: GUI-based project browser for Overleaf Projects
    :maxdepth: 4
    :caption: Developer Guide
 
-   dev_maintenance
+   dev_overview
 
