@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "overleaf_fs"
-version = "0.0.1"
+version = "0.1.0"
 description = "GUI-based project organization for Overleaf"
 keywords = ["overleaf", "file system"]
 readme = "README.rst"
