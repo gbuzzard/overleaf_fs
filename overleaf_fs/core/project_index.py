@@ -41,6 +41,18 @@ import json
 import logging
 
 
+def _parse_overleaf_timestamp(value: str) -> datetime:
+    """Parse ISO 8601 timestamps from Overleaf, accepting a trailing 'Z'.
+
+    Overleaf often returns timestamps like ``YYYY-MM-DDTHH:MM:SS.sssZ``.
+    Python's ``datetime.fromisoformat`` does not accept the trailing ``'Z'``,
+    so we normalize it to ``+00:00`` before parsing.
+    """
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value)
+
+
 def load_projects_index() -> ProjectsIndex:
     """
     Load and merge remote Overleaf projects‑info data with local
@@ -98,7 +110,7 @@ def load_projects_index() -> ProjectsIndex:
                 owner_display_name=entry.get("owner_display_name"),
                 last_modified_raw=entry.get("last_modified_raw", ""),
                 last_modified=(
-                    datetime.fromisoformat(entry["last_modified"])
+                    _parse_overleaf_timestamp(entry["last_modified"])
                     if entry.get("last_modified")
                     else None
                 ),
