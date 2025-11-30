@@ -3,17 +3,17 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python>=3.9
-  - PySide6>=6.7,
-  - requests,
-  - bs4,
-  - pytest
-  - setuptools
-  - sphinx
-  - sphinxcontrib-bibtex
-  - sphinx-book-theme>=1.0.1
-  - sphinx-design
-  - sphinx-copybutton
   - pip  # Add any additional packages here and in pyproject.toml
   - pip:
+      - python>=3.9
+      - PySide6>=6.7,
+      - requests,
+      - bs4,
+      - pytest
+      - setuptools
+      - sphinx
+      - sphinxcontrib-bibtex
+      - sphinx-book-theme>=1.0.1
+      - sphinx-design
+      - sphinx-copybutton
       - -e .
