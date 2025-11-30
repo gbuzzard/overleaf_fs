@@ -124,7 +124,7 @@ from PySide6.QtWidgets import (
 )
 
 from overleaf_fs.core.project_index import load_projects_index
-from overleaf_fs.core.metadata_store import (
+from overleaf_fs.core.directory_structure_store import (
     load_directory_structure,
     create_folder,
     rename_folder,

@@ -34,7 +34,7 @@ from overleaf_fs.core.models import (
     ProjectsIndex,
 )
 
-from overleaf_fs.core.metadata_store import load_directory_structure
+from overleaf_fs.core.directory_structure_store import load_directory_structure
 
 from overleaf_fs.core.config import get_projects_info_path
 import json
