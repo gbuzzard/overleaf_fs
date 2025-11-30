@@ -46,7 +46,7 @@ dev = [
 find = {}
 
 [project.urls]
-source = "https://github.com/gbuzzard/overleaf_file_system"
+source = "https://github.com/gbuzzard/overleaf_fs"
 
 [project.scripts]
 overleaf-fs = "overleaf_fs.gui.main_window:main"
