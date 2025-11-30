@@ -1,0 +1,7 @@
+-e .
+
+sphinx
+sphinxcontrib-bibtex
+sphinx-book-theme>=1.0.1
+sphinx-design
+sphinx-copybutton

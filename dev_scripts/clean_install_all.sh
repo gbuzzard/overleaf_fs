@@ -90,6 +90,6 @@ reset=`tput sgr0`
 
 echo " "
 echo "Use"
-echo "${red}   conda activate overleaf_file_system   ${reset}"
+echo "${red}   conda activate ${NAME}   ${reset}"
 echo "to activate the conda environment."
 echo " "
