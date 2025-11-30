@@ -48,7 +48,7 @@ elsewhere.
 At this stage the module provides two layers of API:
 
 - ``load_directory_structure()`` / ``save_directory_structure()``: work with a
-  ``LocalState`` object that includes both the explicit folder list
+  ``LocalDirectoryStructure`` object that includes both the explicit folder list
   and the per-project ``ProjectLocal`` fields (folder/notes/pinned/hidden).
 
 By default the directory-structure JSON file is stored inside the active
@@ -139,7 +139,7 @@ def _project_local_from_dict(data: Mapping) -> ProjectLocal:
 
 
 @dataclass
-class LocalState:
+class LocalDirectoryStructure:
     """
     Container for all local directory‑structure data persisted in the JSON file.
 
@@ -158,7 +158,7 @@ class LocalState:
     projects: Dict[str, ProjectLocal] = field(default_factory=dict)
 
 
-def _decode_state(raw: Mapping) -> LocalState:
+def _decode_state(raw: Mapping) -> LocalDirectoryStructure:
     """
     Decode a raw JSON object into a LocalState.
 
@@ -169,7 +169,7 @@ def _decode_state(raw: Mapping) -> LocalState:
         raw (Mapping): Raw JSON object decoded from disk.
 
     Returns:
-        LocalState: Decoded folder list and per‑project local
+        LocalDirectoryStructure: Decoded folder list and per‑project local
             directory-structure fields.
     """
     projects_raw = raw.get("projects", {})
@@ -188,14 +188,14 @@ def _decode_state(raw: Mapping) -> LocalState:
     if isinstance(folders_raw, list):
         for entry in folders_raw:
             # Ignore empty-string entries: the Home folder is implicit and
-            # represented by "" in ProjectLocal.folder, not in LocalState.folders.
+            # represented by "" in ProjectLocal.folder, not in LocalDirectoryStructure.folders.
             if isinstance(entry, str) and entry:
                 folders.append(entry)
 
-    return LocalState(folders=folders, projects=projects)
+    return LocalDirectoryStructure(folders=folders, projects=projects)
 
 
-def load_directory_structure(path: Optional[Path] = None) -> LocalState:
+def load_directory_structure(path: Optional[Path] = None) -> LocalDirectoryStructure:
     """
     Load the full local directory‑structure state (folders and per‑project
     local fields) from disk.
@@ -206,33 +206,33 @@ def load_directory_structure(path: Optional[Path] = None) -> LocalState:
             is used.
 
     Returns:
-        LocalState: Object containing folders and per‑project local fields.
+        LocalDirectoryStructure: Object containing folders and per‑project local fields.
         If the file is missing or invalid, an empty LocalState is returned.
     """
     metadata_file = _metadata_path(path)
     if not metadata_file.exists():
-        return LocalState()
+        return LocalDirectoryStructure()
 
     try:
         with metadata_file.open("r", encoding="utf-8") as f:
             raw = json.load(f)
     except (OSError, json.JSONDecodeError):
         # On any I/O or JSON error, fall back to an empty state.
-        return LocalState()
+        return LocalDirectoryStructure()
 
     if not isinstance(raw, Mapping):
-        return LocalState()
+        return LocalDirectoryStructure()
 
     return _decode_state(raw)
 
 
-def save_directory_structure(state: LocalState, path: Optional[Path] = None) -> None:
+def save_directory_structure(state: LocalDirectoryStructure, path: Optional[Path] = None) -> None:
     """
     Save the full local directory‑structure (folders and per‑project
     local fields) to disk.
 
     Args:
-        state (LocalState): Full local directory‑structure to write to disk.
+        state (LocalDirectoryStructure): Full local directory‑structure to write to disk.
         path (Optional[Path]): Optional explicit path. If omitted,
             the default directory‑structure path is used.
 
@@ -259,7 +259,7 @@ def save_directory_structure(state: LocalState, path: Optional[Path] = None) -> 
         f.write("\n")
 
 
-def create_folder(folder_path: str, path: Optional[Path] = None) -> LocalState:
+def create_folder(folder_path: str, path: Optional[Path] = None) -> LocalDirectoryStructure:
     """Create a new folder path in the local directory‑structure, if it does not exist.
 
     This is a convenience helper that:
@@ -279,7 +279,7 @@ def create_folder(folder_path: str, path: Optional[Path] = None) -> LocalState:
             the default directory‑structure path is used.
 
     Returns:
-        LocalState: The updated local directory structure after creation.
+        LocalDirectoryStructure: The updated local directory structure after creation.
     """
     state = load_directory_structure(path)
     if folder_path and folder_path not in state.folders:
@@ -289,7 +289,7 @@ def create_folder(folder_path: str, path: Optional[Path] = None) -> LocalState:
     return state
 
 
-def rename_folder(old_path: str, new_path: str, path: Optional[Path] = None) -> LocalState:
+def rename_folder(old_path: str, new_path: str, path: Optional[Path] = None) -> LocalDirectoryStructure:
     """Rename a folder (and its subtree) in the local directory‑structure.
 
     This updates both the explicit ``folders`` list and any project
@@ -312,7 +312,7 @@ def rename_folder(old_path: str, new_path: str, path: Optional[Path] = None) -> 
             the default directory‑structure path is used.
 
     Returns:
-        LocalState: The updated local directory structure after renaming.
+        LocalDirectoryStructure: The updated local directory structure after renaming.
     """
     if not old_path or old_path == new_path:
         return load_directory_structure(path)
@@ -346,7 +346,7 @@ def rename_folder(old_path: str, new_path: str, path: Optional[Path] = None) -> 
     return state
 
 
-def delete_folder(folder_path: str, path: Optional[Path] = None) -> LocalState:
+def delete_folder(folder_path: str, path: Optional[Path] = None) -> LocalDirectoryStructure:
     """Delete a folder and its subtree from the local directory structure, if empty.
 
     A folder subtree may be deleted only if there are no projects whose
@@ -368,7 +368,7 @@ def delete_folder(folder_path: str, path: Optional[Path] = None) -> LocalState:
             the default directory‑structure path is used.
 
     Returns:
-        LocalState: The updated local directory structure after deletion.
+        LocalDirectoryStructure: The updated local directory structure after deletion.
 
     Raises:
         ValueError: If any project is assigned to a folder within the
@@ -407,7 +407,7 @@ def move_projects_to_folder(
     project_ids: Iterable[str],
     folder_path: Optional[str],
     path: Optional[Path] = None,
-) -> LocalState:
+) -> LocalDirectoryStructure:
     """Assign the given projects to a folder in the local directory‑structure.
 
     This helper updates ``ProjectLocal.folder`` for each project id in
@@ -432,7 +432,7 @@ def move_projects_to_folder(
             the default directory‑structure path is used.
 
     Returns:
-        LocalState: The updated local directory structure after modifying project
+        LocalDirectoryStructure: The updated local directory structure after modifying project
         assignments.
     """
     # Normalize the target folder: None and "" mean Home.
@@ -442,7 +442,7 @@ def move_projects_to_folder(
 
     # Ensure the target folder exists in the folder list if it is
     # non-empty. Home (empty string) is implicit and not stored in
-    # LocalState.folders.
+    # LocalDirectoryStructure.folders.
     if target and target not in state.folders:
         state.folders.append(target)
         state.folders.sort()

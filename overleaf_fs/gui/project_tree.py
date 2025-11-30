@@ -336,7 +336,7 @@ class ProjectTree(QTreeView):
         The tree itself does not directly modify the directory-structure
         data; instead it emits high-level signals that a controller
         (e.g. MainWindow) can handle by updating the local directory-
-        structure state (``LocalState``) via ``metadata_store``.
+        structure (``LocalDirectoryStructure``) via ``metadata_store``.
         """
         index = self.indexAt(event.pos())
         item = self._model.itemFromIndex(index) if index.isValid() else None

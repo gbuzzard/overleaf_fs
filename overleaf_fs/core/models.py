@@ -110,8 +110,7 @@ class ProjectRecord:
     reflects whether Overleaf marks the project as archived on the server.
     If a project is removed from Overleaf, it will no longer appear in
     the projects-info JSON and will therefore be dropped from the
-    in-memory index on the next refresh, regardless of any local
-    metadata.
+    in-memory index on the next refresh.
     """
 
     remote: ProjectRemote
