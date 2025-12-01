@@ -60,9 +60,10 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup  # type: ignore[import]
 
+import overleaf_fs.core.profiles
 from overleaf_fs.core import config
-from overleaf_fs.core.config import get_projects_info_path, get_overleaf_base_url, COOKIE_FILENAME
-
+from overleaf_fs.core.config import COOKIE_FILENAME
+from overleaf_fs.core.profiles import get_projects_info_path, get_overleaf_base_url, get_active_profile_id
 
 LOGGER = logging.getLogger(__name__)
 
@@ -164,7 +165,7 @@ def _get_cookie_path() -> Path:
     Returns:
         Path to the cookie file in the active profile's data directory.
     """
-    active_profile_dir = config.get_active_profile_data_dir()
+    active_profile_dir = overleaf_fs.core.profiles.get_active_profile_data_dir()
     return active_profile_dir / COOKIE_FILENAME
 
 
@@ -213,7 +214,7 @@ def save_cookie_header(cookie_header: str) -> None:
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     LOGGER.info("Saved Overleaf cookie header for profile '%s' to %s",
-                config.get_active_profile_id(), path)
+                get_active_profile_id(), path)
 
 
 # ---------------------------------------------------------------------------

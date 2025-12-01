@@ -1,5 +1,3 @@
-
-
 """Profile manager dialog for OverleafFS.
 
 This module provides a small Qt-based dialog that allows the user to
@@ -52,6 +50,14 @@ from overleaf_fs.core.profiles import (
     PROFILE_CONFIG_FILENAME,
 )
 
+from pathlib import Path
+import shutil
+
+from overleaf_fs.gui.profile_root_ui import (
+    choose_profile_root_directory,
+    looks_like_profile_root,
+)
+
 
 @dataclass
 class _ProfileListEntry:
@@ -82,11 +88,7 @@ class ProfileManagerDialog(QDialog):
     * Creating a new profile
     * Renaming the display name of a profile
     * Deleting a profile configuration (soft delete)
-
-    It does **not** decide which profile is active; instead, callers
-    inspect :attr:`selected_profile` after the dialog is accepted and
-    call :func:`overleaf_fs.core.profiles.set_active_profile_id` as
-    appropriate.
+    * Moving the profile storage location (profile root directory)
     """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -96,10 +98,14 @@ class ProfileManagerDialog(QDialog):
         self._list = QListWidget(self)
         self._list.setSelectionMode(QListWidget.SingleSelection)
 
-        # Buttons along the bottom: New, Rename, Delete, Open, Exit.
+        # Buttons along the bottom: Open, Rename, New, Move, Delete, Exit.
         self._open_button = QPushButton("Open", self)
         self._rename_button = QPushButton("Rename…", self)
         self._new_button = QPushButton("New…", self)
+        self._move_button = QPushButton("Move…", self)
+        self._move_button.setToolTip(
+            "Change the folder where OverleafFS profiles are stored"
+        )
         self._delete_button = QPushButton("Delete", self)
         # Make the delete button visually distinct to emphasize that it
         # is a destructive operation.
@@ -109,6 +115,7 @@ class ProfileManagerDialog(QDialog):
         self._open_button.clicked.connect(self._on_open_clicked)
         self._rename_button.clicked.connect(self._on_rename_profile)
         self._new_button.clicked.connect(self._on_new_profile)
+        self._move_button.clicked.connect(self._on_move_root)
         self._delete_button.clicked.connect(self._on_delete_profile)
         self._exit_button.clicked.connect(self.reject)
 
@@ -116,13 +123,14 @@ class ProfileManagerDialog(QDialog):
 
         # Layout
         main_layout = QVBoxLayout(self)
-        main_layout.addWidget(QLabel("Select a profile to open, or manage profiles:", self))
+        main_layout.addWidget(QLabel("Select a profile to open or manage profiles:", self))
         main_layout.addWidget(self._list)
 
         button_row = QHBoxLayout()
         button_row.addWidget(self._open_button)
         button_row.addWidget(self._rename_button)
         button_row.addWidget(self._new_button)
+        button_row.addWidget(self._move_button)
         button_row.addWidget(self._delete_button)
         button_row.addWidget(self._exit_button)
 
@@ -160,11 +168,6 @@ class ProfileManagerDialog(QDialog):
         """
 
         profiles = discover_profiles()
-        if not profiles:
-            # Preserve the legacy behavior of having a default "Primary"
-            # profile available even if the user has not explicitly
-            # created any profiles yet.
-            profiles = [ensure_default_profile()]
 
         self._list.clear()
         for info in profiles:
@@ -192,6 +195,7 @@ class ProfileManagerDialog(QDialog):
         if profile_id is None:
             return None
         return load_profile_info(profile_id)
+
 
     # ------------------------------------------------------------------
     # Slots
@@ -281,6 +285,129 @@ class ProfileManagerDialog(QDialog):
         info.display_name = new_name
         save_profile_info(info)
         self._refresh_profiles()
+
+    def _on_move_root(self) -> None:
+        """Change the profile root directory and optionally move data.
+
+        This allows the user to change where OverleafFS stores all profile
+        data. The new location is recorded in the global config
+        (``profile_root_dir``). If the chosen folder is empty, the current
+        profile root directory's contents are moved there. If the folder
+        already contains OverleafFS data, the user can either switch to
+        using that existing data or move the current data into the folder,
+        potentially overwriting files.
+        """
+        try:
+            old_root_str = config.get_profile_root_dir()
+        except Exception:
+            old_root_str = ""
+        old_root = Path(old_root_str) if old_root_str else None
+
+        # Use the shared helper so that the explanatory text and
+        # directory-chooser behavior are consistent with the initial
+        # setup flow in the main window.
+        new_root = choose_profile_root_directory(self, current_root=old_root)
+        if new_root is None:
+            return
+
+        new_root = new_root.resolve()
+        if old_root is not None and new_root == old_root.resolve():
+            # No change.
+            return
+
+        looks_like_root = looks_like_profile_root(new_root)
+
+        # If the directory looks like it already contains OverleafFS
+        # data, ask whether to switch or move.
+        if looks_like_root:
+            box = QMessageBox(self)
+            box.setWindowTitle("Existing OverleafFS data found")
+            box.setText(
+                "The selected folder already appears to contain OverleafFS data.\n\n"
+                "What would you like to do?"
+            )
+            use_button = box.addButton("Use existing data in selected folder", QMessageBox.AcceptRole)
+            move_button = box.addButton(
+                "Move current data to selected folder (may overwrite)",
+                QMessageBox.DestructiveRole,
+            )
+            cancel_button = box.addButton(QMessageBox.Cancel)
+            box.setDefaultButton(use_button)
+            box.exec()
+
+            clicked = box.clickedButton()
+            if clicked is cancel_button:
+                return
+            elif clicked is use_button:
+                # Just point the config at the new root and refresh.
+                config.set_profile_root_dir(str(new_root))
+                self._refresh_profiles()
+                QMessageBox.information(
+                    self,
+                    "Profile storage updated",
+                    f"Profile storage folder updated to:\n{new_root}",
+                )
+                return
+            # Otherwise, the user chose to move current data into the
+            # target folder; fall through to the move logic below.
+
+        # At this point we are moving the current root contents into
+        # the new root. This is used when the target is empty or when
+        # the user explicitly requested an overwrite.
+        if old_root is None or not old_root.exists() or not old_root.is_dir():
+            QMessageBox.warning(
+                self,
+                "No existing profile root",
+                "The current profile root directory could not be found. "
+                "Nothing was moved, but the new folder will be used for "
+                "future profiles.",
+            )
+            config.set_profile_root_dir(str(new_root))
+            self._refresh_profiles()
+            QMessageBox.information(
+                self,
+                "Profile storage updated",
+                f"Profile storage folder updated to:\n{new_root}",
+            )
+            return
+
+        # Perform the move: move all items from old_root into new_root.
+        try:
+            new_root.mkdir(parents=True, exist_ok=True)
+            for entry in old_root.iterdir():
+                target = new_root / entry.name
+                # If a target already exists, attempt to remove it first
+                # to honor the user's overwrite choice.
+                if target.exists():
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    else:
+                        target.unlink()
+                shutil.move(str(entry), str(target))
+
+            # Attempt to remove the old root directory itself so that the
+            # entire tree is moved. Ignore errors if the directory is not
+            # empty or cannot be removed.
+            try:
+                old_root.rmdir()
+            except Exception:
+                pass
+        except Exception as exc:  # pragma: no cover - defensive
+            QMessageBox.warning(
+                self,
+                "Error moving profile data",
+                f"An error occurred while moving profile data:\n{exc}",
+            )
+            return
+
+        # Update the config to point at the new root and refresh the list.
+        config.set_profile_root_dir(str(new_root))
+        self._refresh_profiles()
+        QMessageBox.information(
+            self,
+            "Profile storage updated",
+            f"Profile storage folder moved to:\n{new_root}",
+        )
 
     def _on_delete_profile(self) -> None:
         """Delete the configuration for the currently selected profile.

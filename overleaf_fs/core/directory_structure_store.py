@@ -72,6 +72,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Union
 
+import overleaf_fs.core.profiles
 from overleaf_fs.core.models import ProjectLocal
 from overleaf_fs.core import config
 
@@ -99,7 +100,7 @@ def _directory_structure_path(path: Optional[Union[str, Path]] = None) -> Path:
     """
     if path is not None:
         return Path(path)
-    return config.get_directory_structure_path()
+    return overleaf_fs.core.profiles.get_directory_structure_path()
 
 
 def _project_local_to_dict(local: ProjectLocal) -> Dict:

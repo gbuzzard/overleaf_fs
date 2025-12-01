@@ -31,15 +31,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import List, Optional
 
 from overleaf_fs.core import config
-
+from overleaf_fs.core.config import (
+    DEFAULT_PROJECTS_INFO_FILENAME,
+    DEFAULT_DIRECTORY_STRUCTURE_FILENAME,
+)
 
 # Reuse the centralized filename constant from config to avoid
 # hard-coding the profile-config filename in multiple places.
 PROFILE_CONFIG_FILENAME = config.DEFAULT_PROFILE_CONFIG_FILENAME
 ACTIVE_PROFILE_FILENAME = "active_profile.json"
+
+
+# Default internal id for the initial profile created on first run. The
+# display name for this profile is "Primary".
+DEFAULT_PROFILE_ID = "primary"
+DEFAULT_PROFILE_DISPLAY_NAME = "Primary"
 
 
 @dataclass
@@ -266,3 +275,126 @@ def set_active_profile_id(profile_id: str) -> None:
     path = root / ACTIVE_PROFILE_FILENAME
     payload = {"id": profile_id}
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def get_active_profile_info() -> ProfileInfo:
+    """Return the :class:`ProfileInfo` for the active profile.
+
+    The active profile id is stored in ``active_profile.json`` under
+    the profile root directory. If no active profile has been
+    recorded yet, or if the recorded profile cannot be loaded, this
+    falls back to either the first discovered profile or (if none
+    exist) a default ``\"primary\"`` profile created via
+    :func:`ensure_default_profile`. The chosen profile id is then
+    persisted as the active profile id.
+    """
+    # Try the explicitly recorded active profile id first.
+    profile_id = get_active_profile_id()
+    info: Optional[ProfileInfo] = None
+    if profile_id:
+        info = load_profile_info(profile_id)
+
+    # If that failed, fall back to any existing profile, or create
+    # a default one if necessary.
+    if info is None:
+        profiles = discover_profiles()
+        if profiles:
+            info = profiles[0]
+        else:
+            info = ensure_default_profile()
+
+    # Make sure the active-profile record is in sync with the
+    # profile we are about to return.
+    set_active_profile_id(info.id)
+    return info
+
+
+def get_active_profile_data_dir() -> Path:
+    """Return the directory where the active profile's data files live.
+
+    This directory typically contains the Overleaf projects info JSON
+    file and the local directory-structure JSON file for the profile.
+    The directory is created if it does not already exist.
+
+    Returns:
+        Path to the active profile's data directory.
+    """
+    info = get_active_profile_info()
+    data_dir = info.data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
+
+
+def get_projects_info_path() -> Path:
+    """Return the full path to the projects-info JSON file.
+
+    For the active profile this is typically something like::
+
+        get_active_profile_data_dir() / "overleaf_projects_info.json"
+
+    This file holds the cached list of Overleaf projects and related
+    info for the profile (id, title, timestamps, etc.).
+
+    The rest of the application should always use this helper rather
+    than hard-coding paths so that future profile-related changes do
+    not require updates elsewhere.
+
+    Returns:
+        Path to the projects-info JSON file (``overleaf_projects_info.json``)
+        for the active profile.
+    """
+
+    return get_active_profile_data_dir() / DEFAULT_PROJECTS_INFO_FILENAME
+
+
+def get_directory_structure_path() -> Path:
+    """Return the full path to the local directory-structure JSON file.
+
+    This file holds OverleafFS (local-only) data (directory structure,
+    pinned/hidden flags, etc.) for the active profile. Keeping the path
+    helper here avoids scattering assumptions about the file layout
+    across the codebase.
+
+    Returns:
+        Path to the directory-structure JSON file
+        (``local_directory_structure.json``) for the active profile.
+    """
+
+    return get_active_profile_data_dir() / DEFAULT_DIRECTORY_STRUCTURE_FILENAME
+
+
+def get_profile_name() -> str:
+    """Return a human-readable name for the active profile.
+
+    This is primarily a convenience for UI code that wants to display a
+    label such as "Profile: Primary". For now it simply returns the
+    active profile's display name.
+
+    Returns:
+        Display name of the active profile.
+    """
+    return get_active_profile_info().display_name
+
+
+def get_overleaf_base_url() -> str:
+    """Return the Overleaf base URL for the active profile.
+
+    This value is used by the scraper and embedded login dialog to
+    determine which Overleaf server to talk to (for example,
+    "https://www.overleaf.com" for the public service or an
+    institution-hosted instance).
+    """
+    return get_active_profile_info().overleaf_base_url
+
+
+def set_overleaf_base_url(url: str) -> None:
+    """Set the Overleaf base URL for the active profile.
+
+    Args:
+        url: Base URL for the Overleaf server associated with the
+            active profile. This should include the scheme, e.g.
+            "https://www.overleaf.com".
+    """
+    info = get_active_profile_info()
+    info.overleaf_base_url = url
+    save_profile_info(info)

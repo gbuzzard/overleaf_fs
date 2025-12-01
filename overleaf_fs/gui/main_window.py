@@ -97,10 +97,8 @@ the underlying directory structure portable and profile-aware.
 from __future__ import annotations
 import sys
 import json
-import shutil
 from datetime import datetime
 from typing import Optional
-from pathlib import Path
 import requests
 
 from PySide6.QtCore import Qt, QUrl, QModelIndex, QSortFilterProxyModel, QMimeData, QPoint, QSettings, Signal, QEvent
@@ -118,7 +116,6 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QMessageBox,
     QAbstractItemView,
-    QFileDialog,
     QLabel,
     QStyle,
 )
@@ -135,12 +132,10 @@ from overleaf_fs.core.directory_structure_store import (
 from overleaf_fs.core.config import (
     get_profile_root_dir_optional,
     set_profile_root_dir,
-    get_overleaf_base_url,
-    get_active_profile_data_dir,
     DEFAULT_PROJECTS_INFO_FILENAME,
     DEFAULT_DIRECTORY_STRUCTURE_FILENAME,
-    DEFAULT_PROFILE_CONFIG_FILENAME,
 )
+from overleaf_fs.core.profiles import get_active_profile_data_dir, get_overleaf_base_url, get_active_profile_info
 from overleaf_fs.core.overleaf_scraper import (
     sync_overleaf_projects_for_active_profile,
     CookieRequiredError,
@@ -154,6 +149,7 @@ from overleaf_fs.gui.project_tree import (
     FolderPathRole,
 )
 from overleaf_fs.gui.overleaf_login import OverleafLoginDialog, WEBENGINE_AVAILABLE
+from overleaf_fs.gui.profile_root_ui import choose_profile_root_directory
 
 
 class _StatusLabel(QLabel):
@@ -591,7 +587,6 @@ class MainWindow(QMainWindow):
         # Toolbar and menu bar with a prominent Refresh action.
         self._refresh_action = self._create_actions()
         self._create_toolbar()
-        self._create_menus()
 
         # Status bar for lightweight feedback messages, plus a persistent
         # summary of last sync/load times.
@@ -719,6 +714,9 @@ class MainWindow(QMainWindow):
         Overleaf if a cookie is available.
         """
         self._ensure_profile_root_dir()
+
+        # After ensuring we have a profile root:
+        get_active_profile_info()
 
         # First, load what we have on disk so the user immediately sees
         # their existing folder structure and projects (if any).
@@ -921,175 +919,17 @@ class MainWindow(QMainWindow):
         if current_root is not None:
             return
 
-        # Default suggestion: a subdirectory under the user's home
-        # directory. The user is free to pick any path (e.g. a cloud
-        # drive folder) to make OverleafFS data available across machines.
-        default_dir = str((Path.home() / "overleaf_fs_profiles").expanduser())
-
-        # Explain what this choice means so the file picker is not a
-        # surprise on first startup.
-        QMessageBox.information(
-            self,
-            "Choose a directory to hold one or more profiles",
-            "OverleafFS can manage multiple Overleaf accounts with a separate "
-            "profile for each, all stored under a common profile root directory, "
-            "which you can select here.\n\n"
-            "A typical root choice is 'overleaf_fs_profiles', which would then be used "
-            "to hold subdirectories such as 'primary' and 'personal' created by "
-            "OverleafFS after you authenticate to each Overleaf account.\n\n"
-            "Recommendation: choose a folder in a cloud-synced location "
-            "(e.g. Dropbox, OneDrive, iCloud) if you want to share the same "
-            "profiles across multiple computers.  If you've created a cloud-based "
-            "folder on another machine, choose it here to share."
-        )
-
-        dialog = QFileDialog(
-            self,
-            "Choose OverleafFS profile folder - typically 'overleaf_fs_profiles'",
-            default_dir,
-        )
-        dialog.setFileMode(QFileDialog.Directory)
-        dialog.setOption(QFileDialog.ShowDirsOnly, True)
-        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
-
-        # Pre-select the suggested default directory so that it appears
-        # in the "Directory:" field and is highlighted in the central
-        # view when the dialog opens.
-        default_path = Path(default_dir).expanduser()
-        parent_for_view = default_path.parent
-        dialog.setDirectory(str(parent_for_view))
-        dialog.selectFile(str(default_path))
-
-        # Add common cloud-storage locations (if present) to the sidebar
-        # so that Dropbox, Box, OneDrive, etc. are easy to access.
-        sidebar_urls = self._cloud_sidebar_urls()
-        if sidebar_urls:
-            dialog.setSidebarUrls(sidebar_urls)
-
-        if dialog.exec() != QFileDialog.Accepted:
+        # Use the shared helper so that the explanatory text and
+        # directory-chooser behavior are consistent with the Profile
+        # Manager's "Move…" operation.
+        chosen = choose_profile_root_directory(self, current_root=None)
+        if chosen is None:
             # User cancelled; exit the application to avoid running with
-            # an undefined profile root.
+            # an undefined profile root on first startup.
             sys.exit(0)
 
-        selected_files = dialog.selectedFiles()
-        if not selected_files:
-            sys.exit(0)
+        set_profile_root_dir(chosen)
 
-        set_profile_root_dir(Path(selected_files[0]))
-
-    def _cloud_sidebar_urls(self) -> list[QUrl]:
-        """Return a list of sidebar URLs for useful profile/data locations.
-
-        The sidebar entries are intended to make it easy to navigate to:
-
-        * The user's home directory,
-        * The current OverleafFS profile root directory (if configured),
-        * Common cloud-storage folders such as Dropbox, Box, and OneDrive,
-        * Provider-specific folders under ``~/Library/CloudStorage`` on macOS.
-
-        This improves discoverability of cloud-sync locations when using
-        the non-native ``QFileDialog`` on macOS, where these folders may
-        not appear as top-level items by default.
-        """
-        urls: list[QUrl] = []
-
-        def add_path(path: Path, seen: set[str]) -> None:
-            try:
-                path = path.expanduser().resolve()
-            except Exception:
-                # Fall back to the raw path if resolution fails.
-                pass
-            as_str = str(path)
-            if as_str in seen:
-                return
-            if not path.exists():
-                return
-            urls.append(QUrl.fromLocalFile(as_str))
-            seen.add(as_str)
-
-        seen: set[str] = set()
-
-        home = Path.home()
-        add_path(home, seen)
-
-        # Include the current profile root directory, if configured and
-        # distinct from the home directory. This makes it easy for the
-        # user to re-select or inspect the active profile location.
-        current_root = get_profile_root_dir_optional()
-        if current_root is not None:
-            add_path(current_root, seen)
-
-        # Common top-level folders in the user's home directory.
-        for name in ("Dropbox", "Box", "OneDrive"):
-            candidate = home / name
-            add_path(candidate, seen)
-
-        # Modern macOS cloud integrations often live under:
-        #   ~/Library/CloudStorage/<provider-specific folder>
-        cloud_root = home / "Library" / "CloudStorage"
-        if cloud_root.exists():
-            try:
-                for child in cloud_root.iterdir():
-                    if child.is_dir():
-                        add_path(child, seen)
-            except Exception:
-                # Best-effort only; ignore errors from iterating this directory.
-                pass
-
-        return urls
-
-    def _looks_like_profile_root(self, path: Path) -> bool:
-        """Return True if ``path`` appears to contain OverleafFS profile data.
-
-        This is a heuristic used when the user chooses a new profile
-        folder. If the selected directory already contains OverleafFS
-        profile data files (e.g., project-info and directory-structure
-        JSON from another machine), we treat it as an existing profile
-        root and offer to switch to it rather than moving the current
-        profile into that directory.
-        """
-        try:
-            path = path.expanduser().resolve()
-        except Exception:
-            # Fall back to the raw path if resolution fails.
-            pass
-
-        if not path.exists() or not path.is_dir():
-            return False
-
-        # Heuristic: consider this a profile root if it contains one of
-        # the known profile data files (project info, directory structure,
-        # or profile config) either directly, or inside a single subfolder
-        # such as "primary".
-        sentinel_names = {
-            DEFAULT_PROJECTS_INFO_FILENAME,
-            DEFAULT_DIRECTORY_STRUCTURE_FILENAME,
-            DEFAULT_PROFILE_CONFIG_FILENAME,
-        }
-
-        # First: check top-level files.
-        try:
-            for child in path.iterdir():
-                if child.is_file() and child.name in sentinel_names:
-                    return True
-        except Exception:
-            return False
-
-        # Second: check exactly one level deeper, e.g. path/primary/*.
-        try:
-            for child in path.iterdir():
-                if not child.is_dir():
-                    continue
-                try:
-                    for sub in child.iterdir():
-                        if sub.is_file() and sub.name in sentinel_names:
-                            return True
-                except Exception:
-                    continue
-        except Exception:
-            return False
-
-        return False
 
     def _load_expanded_folder_keys(self) -> list[str]:
         """Return the list of folder keys that were expanded last session.
@@ -1165,7 +1005,7 @@ class MainWindow(QMainWindow):
 
         * Local/data: "Reload from disk" (no network),
         * Overleaf/network: "Sync with Overleaf" and "Open Overleaf dashboard",
-        * Profile/environment: "Change profile folder…",
+        * Profiles: "Profile Manager…",
         * Help: "Help" and "Docs" actions.
         """
         # Reload from disk: re-read local projects info and directory
@@ -1192,12 +1032,6 @@ class MainWindow(QMainWindow):
         self._open_dashboard_action.setToolTip("Open the Overleaf projects page in your browser")
         self._open_dashboard_action.triggered.connect(self._on_open_overleaf_dashboard)
 
-        # Change profile folder: allow the user to move the profile
-        # data directory to a new folder (e.g. a different cloud-synced
-        # location).
-        self._change_profile_location_action = QAction("Change profile folder…", self)
-        self._change_profile_location_action.setToolTip("Choose a new directory for OverleafFS profiles")
-        self._change_profile_location_action.triggered.connect(self._on_change_profile_location)
 
         # Profile Manager: open a separate window to manage profiles
         # (create, rename, delete) and choose which profile should be
@@ -1254,33 +1088,6 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(self._help_action)
         toolbar.addAction(self._docs_action)
-
-    def _create_menus(self) -> None:
-        """Create the main menu bar: File, Overleaf, and Help.
-
-        * File: local/data and profile actions,
-        * Overleaf: network-related actions,
-        * Help: usage help and Docs action.
-        """
-        menubar = self.menuBar()
-
-        # File menu: local reload and profile folder.
-        file_menu = menubar.addMenu("&File")
-        file_menu.addAction(self._reload_action)
-        file_menu.addSeparator()
-        file_menu.addAction(self._change_profile_location_action)
-        file_menu.addSeparator()
-        file_menu.addAction(self._profile_manager_action)
-
-        # Overleaf menu: network actions.
-        overleaf_menu = menubar.addMenu("&Overleaf")
-        overleaf_menu.addAction(self._sync_action)
-        overleaf_menu.addAction(self._open_dashboard_action)
-
-        # Help menu: usage help and Docs.
-        help_menu = menubar.addMenu("&Help")
-        help_menu.addAction(self._help_action)
-        help_menu.addAction(self._docs_action)
 
     def _on_open_profile_manager(self) -> None:
         """Request launching the Profile Manager and close this window.
@@ -1532,165 +1339,6 @@ class MainWindow(QMainWindow):
         overleaf_projects_url = QUrl(f"{base}/project")
         QDesktopServices.openUrl(overleaf_projects_url)
 
-    def _on_change_profile_location(self) -> None:
-        """Allow the user to choose a new profile root directory.
-
-        This reuses the same logic as the initial profile selection but
-        does not exit the application if the user cancels. When a new
-        directory is chosen, it is saved and the data is reinitialized.
-        Distinguishes between switching to an existing profile and moving the current profile.
-        """
-        current_root = get_profile_root_dir_optional()
-        if current_root is not None:
-            default_dir = str(current_root.parent)
-        else:
-            default_dir = str((Path.home() / "overleaf_fs_profiles").expanduser().parent)
-
-        QMessageBox.information(
-            self,
-            "Change profile storage location",
-            "Choose a new directory for OverleafFS profiles.\n\n"
-            "Recommendation: use a cloud-synced folder if you want to\n"
-            "share profiles across multiple machines.",
-        )
-
-        title = (
-            "Choose OverleafFS profile folder - typically 'overleaf_fs_profiles'"
-            if current_root is None
-            else "Choose OverleafFS profile folder - current profile folder preselected"
-        )
-        dialog = QFileDialog(
-            self,
-            title,
-            default_dir,
-        )
-        dialog.setFileMode(QFileDialog.Directory)
-        dialog.setOption(QFileDialog.ShowDirsOnly, True)
-        dialog.setOption(QFileDialog.DontUseNativeDialog, True)
-
-        # Add common cloud-storage locations (if present) to the sidebar.
-        sidebar_urls = self._cloud_sidebar_urls()
-        if sidebar_urls:
-            dialog.setSidebarUrls(sidebar_urls)
-
-        # If a current profile root exists, open the dialog on its parent
-        # directory and pre-select the current root so that it appears
-        # highlighted in the central list and in the "Directory:" field.
-        if current_root is not None:
-            try:
-                current_root_path = current_root.expanduser().resolve()
-            except Exception:
-                current_root_path = current_root
-            parent_for_view = current_root_path.parent
-            dialog.setDirectory(str(parent_for_view))
-            dialog.selectFile(str(current_root_path))
-
-        if dialog.exec() != QFileDialog.Accepted:
-            return
-
-        selected_files = dialog.selectedFiles()
-        if not selected_files:
-            return
-
-        new_root = Path(selected_files[0])
-
-        # Resolve the currently active root (if any) and the newly
-        # chosen root so that comparisons are stable.
-        current_root = get_profile_root_dir_optional()
-        if current_root is not None:
-            try:
-                current_root = current_root.expanduser().resolve()
-            except Exception:
-                current_root = current_root
-
-        try:
-            new_root_resolved = new_root.expanduser().resolve()
-        except Exception:
-            new_root_resolved = new_root
-
-        # If the user selected the same directory, nothing to do.
-        if current_root is not None and current_root == new_root_resolved:
-            return
-
-        # If the chosen directory already appears to contain OverleafFS
-        # profile data, treat this as a "switch profile" operation
-        # rather than moving the current profile into that directory.
-        if self._looks_like_profile_root(new_root_resolved):
-            reply = QMessageBox.question(
-                self,
-                "Use existing profile?",
-                "The selected folder already contains OverleafFS profile data.\n\n"
-                "Do you want to switch to this profile on this machine?\n"
-                "No files will be moved.",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if reply != QMessageBox.Yes:
-                return
-
-            set_profile_root_dir(new_root_resolved)
-            self.initialize_data()
-            return
-
-        # Otherwise, if there is an existing profile root and it differs
-        # from the newly chosen root, attempt to move the existing
-        # profile files into the new location so that cookies, project
-        # info, directory structure, and other local data are preserved.
-        if (
-            current_root is not None
-            and current_root.exists()
-        ):
-            try:
-                # Ensure the new root exists.
-                new_root_resolved.mkdir(parents=True, exist_ok=True)
-
-                # If the new root is not empty, warn the user that files
-                # may be overwritten and allow them to cancel the move.
-                try:
-                    is_empty = not any(new_root_resolved.iterdir())
-                except Exception:
-                    is_empty = False
-
-                if not is_empty:
-                    reply = QMessageBox.question(
-                        self,
-                        "Move existing profile data?",
-                        "The selected directory is not empty but doesn't appear to have OverleafFS profiles.\n\n"
-                        "Existing OverleafFS profile files will be moved into this "
-                        "directory and may overwrite files with the same name.\n\n"
-                        "Do you want to continue?",
-                        QMessageBox.Yes | QMessageBox.No,
-                        QMessageBox.No,
-                    )
-                    if reply != QMessageBox.Yes:
-                        return
-
-                # Move all children (files and subdirectories) from the
-                # current root into the new root.
-                for child in current_root.iterdir():
-                    dest = new_root_resolved / child.name
-                    try:
-                        shutil.move(str(child), str(dest))
-                    except Exception as exc:
-                        QMessageBox.warning(
-                            self,
-                            "Error moving profile data",
-                            f"Could not move '{child}' to '{dest}':\n{exc}",
-                        )
-                        return
-            except Exception as exc:
-                QMessageBox.warning(
-                    self,
-                    "Error moving profile data",
-                    f"Could not move existing profile files to the new location:\n{exc}",
-                )
-                return
-
-        # Persist the new root directory and re-run data initialization
-        # so that subsequent loads use the updated location (which now
-        # contains the moved profile files, including any saved cookie).
-        set_profile_root_dir(new_root_resolved)
-        self.initialize_data()
 
     def _on_help(self) -> None:
         """Show a brief help dialog with basic usage instructions."""

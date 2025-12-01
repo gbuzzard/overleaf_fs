@@ -12,8 +12,9 @@ unset, and the GUI must handle prompting the user.
 Design overview
 ---------------
 This module centralizes decisions about where overleaf project info and
-local directory structure are stored on disk, and it lays the groundwork
-for supporting multiple Overleaf accounts ("profiles") in the future.
+local directory structure are stored on disk, and it cooperates with
+:mod:`overleaf_fs.core.profiles` to support multiple Overleaf profiles,
+each stored in its own directory under the profile root.
 
 Local overleaf project info and directory structure
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -24,9 +25,10 @@ conda (``~/.conda``). For this application we use
     ~/.overleaf_fs/
 
 as the bootstrap directory. Inside that directory we keep a small
-JSON configuration file (``config.json``) that describes where the
-actual profile data directories live and which profile is currently
-active.
+JSON configuration file (``config.json``) that records where the
+actual profile data directories live. The choice of active profile
+and other per-profile settings are stored alongside the profile
+data, rather than in this bootstrap config.
 
 Each profile represents a local view of one Overleaf account (or
 usage context) and has its own directory containing data files such as:
@@ -51,11 +53,17 @@ A typical layout might look like::
 
 where ``/path/to/profile_root_dir`` is either a local directory or a
 cloud-synced directory (e.g. on Dropbox or iCloud) chosen by the
-user. The bootstrap config remembers both the profile root directory
-and the set of defined profiles, and it records which profile was
-last active so we can reopen it by default on the next launch.
+user. The bootstrap config remembers only the profile root directory.
+Information about individual profiles and which profile was last
+active is stored under the profile root itself (for example, in
+profile-specific configuration files).
 
-For now, this module initializes a single "Primary" profile and
+This module manages the bootstrap configuration only; profile discovery,
+active-profile selection, and per-profile settings are handled entirely
+in :mod:`overleaf_fs.core.profiles`, which builds on top of this module
+to manage all per-profile data.
+
+This module initializes a single "Primary" profile and
 stores all profile data under a default profile root directory inside
 ``~/.overleaf_fs``. The rest of the application should always obtain
 paths via the helpers in this module so that future additions such
@@ -65,7 +73,6 @@ elsewhere.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -82,13 +89,8 @@ APP_DIR_NAME = ".overleaf_fs"
 # Name of the JSON configuration file inside the bootstrap directory.
 CONFIG_FILENAME = "config.json"
 
-# Default internal id for the initial profile created on first run. The
-# display name for this profile is "Primary".
-DEFAULT_PROFILE_ID = "primary"
-DEFAULT_PROFILE_DISPLAY_NAME = "Primary"
-
 # Default names for the per-profile data files. These live inside the
-# profile's own directory (see ``get_active_profile_data_dir``).
+# profile's own directory (see ``profiles.get_active_profile_data_dir``).
 # - DEFAULT_PROJECTS_INFO_FILENAME: cached Overleaf projects info for this profile.
 #   This is the "projects-info JSON file" (``overleaf_projects_info.json``).
 # - DEFAULT_DIRECTORY_STRUCTURE_FILENAME: local-only directory structure and
@@ -111,30 +113,6 @@ COOKIE_FILENAME = "overleaf_cookie.json"
 
 # Version information
 FILE_FORMAT_VERSION = 1
-
-
-@dataclass
-class ProfileConfig:
-    """Configuration for a single profile.
-
-    This describes where the profile's data files live relative to the
-    shared profile root directory and which human-readable name should
-    be shown in the UI.
-
-    Attributes:
-        profile_id: Internal identifier (e.g. "primary", "ornl").
-        display_name: Human-readable name (e.g. "Primary", "ORNL").
-        relative_path: Subdirectory name under the profile root
-            directory where this profile's state files live.
-        overleaf_base_url: Base URL for the Overleaf server associated
-            with this profile (e.g. "https://www.overleaf.com").
-    """
-
-    profile_id: str
-    display_name: str
-    relative_path: str
-    overleaf_base_url: str
-
 
 # ---------------------------------------------------------------------------
 # Low-level helpers for bootstrap directory and config.json
@@ -208,25 +186,26 @@ def _save_raw_config(cfg: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# High-level configuration model (single active profile)
+# High-level configuration model (bootstrap-only)
 # ---------------------------------------------------------------------------
 
 
 def _ensure_default_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Ensure that the configuration dictionary has basic required keys.
 
-    This helper provides a minimal, single-profile configuration when no
-    explicit config is present. It can be extended later to support
-    multiple profiles and a richer UI for managing them.
+    At this stage the global configuration is intentionally minimal:
+    it only tracks the ``profile_root_dir`` that points to the
+    directory under which all profile data directories live. All
+    per-profile configuration (including the active profile and
+    per-profile settings) is handled in :mod:`overleaf_fs.core.profiles`.
 
     Args:
         raw: Existing configuration dictionary (possibly empty).
 
     Returns:
-        A configuration dictionary with at least the keys
-        ``profile_root_dir``, ``profiles``, and ``active_profile``.
+        A configuration dictionary with at least the key
+        ``profile_root_dir``.
     """
-
     cfg = dict(raw) if raw is not None else {}
 
     # Determine the root directory under which all profile data
@@ -236,30 +215,6 @@ def _ensure_default_config(raw: Dict[str, Any]) -> Dict[str, Any]:
     if not profile_root_dir:
         # Leave unset so the GUI can prompt the user on first run.
         cfg["profile_root_dir"] = None
-
-    # Ensure there is at least a single "primary" profile.
-    profiles = cfg.get("profiles") or {}
-    if DEFAULT_PROFILE_ID not in profiles:
-        profiles[DEFAULT_PROFILE_ID] = {
-            "display_name": DEFAULT_PROFILE_DISPLAY_NAME,
-            "relative_path": DEFAULT_PROFILE_ID,
-            "overleaf_base_url": DEFAULT_OVERLEAF_BASE_URL,
-        }
-
-    # Ensure all profiles have an Overleaf base URL configured so that
-    # institution-specific Overleaf instances (e.g. ORNL) can be
-    # associated with their own profiles.
-    for pid, pdata in profiles.items():
-        if "overleaf_base_url" not in pdata or not pdata["overleaf_base_url"]:
-            pdata["overleaf_base_url"] = DEFAULT_OVERLEAF_BASE_URL
-
-    cfg["profiles"] = profiles
-
-    # Ensure the active profile id is set and points to a known profile.
-    active = cfg.get("active_profile") or DEFAULT_PROFILE_ID
-    if active not in profiles:
-        active = DEFAULT_PROFILE_ID
-    cfg["active_profile"] = active
 
     return cfg
 
@@ -272,8 +227,8 @@ def load_config() -> Dict[str, Any]:
     defaults and writes the result back to disk if changes were needed.
 
     Returns:
-        A configuration dictionary containing at least the keys
-        ``profile_root_dir``, ``profiles``, and ``active_profile``.
+        A configuration dictionary containing at least the key
+        ``profile_root_dir``.
     """
 
     raw = _load_raw_config()
@@ -308,111 +263,6 @@ def get_profile_root_dir() -> Path:
     return Path(root).expanduser()
 
 
-def get_active_profile_id() -> str:
-    """Return the identifier of the active profile.
-
-    Returns:
-        Internal profile id (e.g. ``"primary"``).
-    """
-
-    cfg = load_config()
-    return cfg["active_profile"]
-
-
-def get_active_profile_config() -> ProfileConfig:
-    """Return the configuration object for the active profile.
-
-    Returns:
-        ProfileConfig describing the active profile.
-    """
-
-    cfg = load_config()
-    profile_id = cfg["active_profile"]
-    profiles = cfg.get("profiles", {})
-    pdata = profiles.get(profile_id) or {}
-
-    display_name = pdata.get("display_name") or DEFAULT_PROFILE_DISPLAY_NAME
-    relative_path = pdata.get("relative_path") or profile_id
-    overleaf_base_url = pdata.get("overleaf_base_url") or DEFAULT_OVERLEAF_BASE_URL
-
-    return ProfileConfig(
-        profile_id=profile_id,
-        display_name=display_name,
-        relative_path=relative_path,
-        overleaf_base_url=overleaf_base_url,
-    )
-
-
-def get_active_profile_data_dir() -> Path:
-    """Return the directory where the active profile's data files live.
-
-    This directory typically contains the Overleaf projects info JSON
-    file and the local directory-structure JSON file for the profile.
-    The directory is created if it does not already exist.
-
-    Returns:
-        Path to the active profile's data directory.
-    """
-
-    current_root = get_profile_root_dir()
-    profile_cfg = get_active_profile_config()
-    data_dir = current_root / profile_cfg.relative_path
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir
-
-
-def get_projects_info_path() -> Path:
-    """Return the full path to the projects-info JSON file.
-
-    For the active profile this is typically something like::
-
-        get_active_profile_data_dir() / "overleaf_projects_info.json"
-
-    This file holds the cached list of Overleaf projects and related
-    info for the profile (id, title, timestamps, etc.).
-
-    The rest of the application should always use this helper rather
-    than hard-coding paths so that future profile-related changes do
-    not require updates elsewhere.
-
-    Returns:
-        Path to the projects-info JSON file (``overleaf_projects_info.json``)
-        for the active profile.
-    """
-
-    return get_active_profile_data_dir() / DEFAULT_PROJECTS_INFO_FILENAME
-
-
-def get_directory_structure_path() -> Path:
-    """Return the full path to the local directory-structure JSON file.
-
-    This file holds OverleafFS (local-only) data (directory structure,
-    pinned/hidden flags, etc.) for the active profile. Keeping the path
-    helper here avoids scattering assumptions about the file layout
-    across the codebase.
-
-    Returns:
-        Path to the directory-structure JSON file
-        (``local_directory_structure.json``) for the active profile.
-    """
-
-    return get_active_profile_data_dir() / DEFAULT_DIRECTORY_STRUCTURE_FILENAME
-
-
-def get_profile_name() -> str:
-    """Return a human-readable name for the active profile.
-
-    This is primarily a convenience for UI code that wants to display a
-    label such as "Profile: Primary". For now it simply returns the
-    active profile's display name.
-
-    Returns:
-        Display name of the active profile.
-    """
-
-    return get_active_profile_config().display_name
-
-
 def get_profile_root_dir_optional() -> Optional[Path]:
     """Return the configured profile root directory or None if unset."""
     cfg = load_config()
@@ -426,33 +276,4 @@ def set_profile_root_dir(path: Path) -> None:
     """Set the profile_root_dir in config.json to the given path."""
     cfg = load_config()
     cfg["profile_root_dir"] = str(path)
-    _save_raw_config(cfg)
-
-
-def get_overleaf_base_url() -> str:
-    """Return the Overleaf base URL for the active profile.
-
-    This value is used by the scraper and embedded login dialog to
-    determine which Overleaf server to talk to (for example,
-    "https://www.overleaf.com" for the public service or an
-    institution-hosted instance).
-    """
-    return get_active_profile_config().overleaf_base_url
-
-
-def set_overleaf_base_url(url: str) -> None:
-    """Set the Overleaf base URL for the active profile.
-
-    Args:
-        url: Base URL for the Overleaf server associated with the
-            active profile. This should include the scheme, e.g.
-            "https://www.overleaf.com".
-    """
-    cfg = load_config()
-    profiles = cfg.get("profiles") or {}
-    profile_id = cfg.get("active_profile") or DEFAULT_PROFILE_ID
-    pdata = profiles.get(profile_id) or {}
-    pdata["overleaf_base_url"] = url
-    profiles[profile_id] = pdata
-    cfg["profiles"] = profiles
     _save_raw_config(cfg)

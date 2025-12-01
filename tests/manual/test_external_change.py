@@ -16,7 +16,7 @@ This is **not** an automated test. It is a developer sanity check.
 import shutil
 from pathlib import Path
 
-from overleaf_fs.core.config import get_active_profile_data_dir
+from overleaf_fs.core.profiles import get_active_profile_data_dir
 
 from PySide6.QtWidgets import QApplication
 from overleaf_fs.gui.main_window import MainWindow

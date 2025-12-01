@@ -36,7 +36,7 @@ from overleaf_fs.core.models import (
 
 from overleaf_fs.core.directory_structure_store import load_directory_structure
 
-from overleaf_fs.core.config import get_projects_info_path
+from overleaf_fs.core.profiles import get_projects_info_path
 import json
 import logging
 

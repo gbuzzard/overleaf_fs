@@ -25,9 +25,11 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QMessageBox,
     QSizePolicy,
+    QLineEdit,
+    QHBoxLayout,
 )
 
-from overleaf_fs.core.config import get_overleaf_base_url
+from overleaf_fs.core.profiles import get_overleaf_base_url
 
 # Try to import Qt WebEngine. If this fails, we provide a stub dialog
 # below that informs the user that embedded login is unavailable.
@@ -68,15 +70,32 @@ if WEBENGINE_AVAILABLE:
             self._login_url = f"{base_url}/project"
             self._target_host = QUrl(self._login_url).host()
 
-            self.setWindowTitle("Log in to Overleaf")
-            # Start with a reasonably large default size so that the
-            # embedded browser is comfortably usable, even before the
-            # user resizes the window.
-            self.resize(1000, 700)
-
             layout = QVBoxLayout(self)
+
+            # URL override controls
+            url_row = QHBoxLayout()
+            info_label1 = QLabel(
+                "Log in to Overleaf in the embedded browser below. "
+                "If needed, enter a nonstandard Overleaf URL below."
+            )
+            info_label1.setWordWrap(True)
+            # Do not allow the label to expand vertically; it should
+            # take only the space it needs so that the browser view
+            # can occupy most of the dialog height.
+            info_policy = info_label1.sizePolicy()
+            info_policy.setVerticalPolicy(QSizePolicy.Fixed)
+            info_label1.setSizePolicy(info_policy)
+            layout.addWidget(info_label1)
+
+            url_label = QLabel("Overleaf login URL:")
+            self._base_url_edit = QLineEdit(base_url, self)
+            self._base_url_edit.setPlaceholderText("https://www.overleaf.com")
+            self._base_url_edit.editingFinished.connect(self._on_base_url_changed)
+            url_row.addWidget(url_label)
+            url_row.addWidget(self._base_url_edit)
+            layout.addLayout(url_row)
+
             info_label = QLabel(
-                "Log in to Overleaf in the embedded browser below.\n\n"
                 "Once you are logged in and can see your projects, "
                 "click 'Use this login' to continue.\n\n"
                 ">>>>> IMPORTANT: Accept essential cookies or all cookies"
@@ -118,9 +137,16 @@ if WEBENGINE_AVAILABLE:
             # Give most of the vertical space to the embedded browser
             # view, with minimal height reserved for the label and
             # button row.
-            layout.setStretch(0, 0)  # info_label row
-            layout.setStretch(1, 1)  # QWebEngineView row
-            layout.setStretch(2, 0)  # buttons row
+            layout.setStretch(0, 0)  # url_row
+            layout.setStretch(1, 0)  # info_label row
+            layout.setStretch(2, 1)  # QWebEngineView row
+            layout.setStretch(3, 0)  # buttons row
+
+            self.setWindowTitle("Log in to Overleaf")
+            # Start with a reasonably large default size so that the
+            # embedded browser is comfortably usable, even before the
+            # user resizes the window.
+            self.resize(1000, 700)
 
         # ------------------------------------------------------------------
         # Public API
@@ -138,6 +164,15 @@ if WEBENGINE_AVAILABLE:
             if result == QDialog.Accepted:
                 return self._cookie_header
             return None
+
+        def _on_base_url_changed(self) -> None:
+            """Reload the login page when the user edits the base URL."""
+            new_base = self._base_url_edit.text().strip().rstrip("/")
+            if not new_base:
+                return
+            self._login_url = f"{new_base}/project"
+            self._target_host = QUrl(self._login_url).host()
+            self._view.load(QUrl(self._login_url))
 
         # ------------------------------------------------------------------
         # Internal helpers
