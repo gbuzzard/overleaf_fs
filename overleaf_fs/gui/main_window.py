@@ -359,14 +359,18 @@ class ProjectTableView(QTableView):
             # If the user clicks on an already-selected row with no
             # modifiers, do not change the selection. This preserves
             # multi-row selection so that all selected rows participate
-            # in the subsequent drag.
+            # in the subsequent drag. However, we still want clicks in
+            # the Pinned column to behave as real clicks so that the
+            # pin/unpin toggle logic can run.
             if (
                 index.isValid()
                 and selection_model is not None
                 and selection_model.isSelected(index)
                 and not (event.modifiers() & (Qt.ControlModifier | Qt.ShiftModifier | Qt.MetaModifier))
             ):
-                return
+                from overleaf_fs.gui.project_table_model import ProjectTableModel as _PTM  # local import to avoid cycles
+                if index.column() != _PTM.COLUMN_PINNED:
+                    return
 
         super().mousePressEvent(event)
 
@@ -489,6 +493,11 @@ class MainWindow(QMainWindow):
         self._last_loaded: Optional[datetime] = None
         self._last_synced: Optional[datetime] = None
         self._load_persisted_sync_times()
+
+        # Flag that allows the main window to request launching the
+        # Profile Manager. The application entry point (`run`) checks
+        # this after the event loop exits.
+        self._launch_profile_manager: bool = False
 
         # Ensure that the profile root directory is configured before we
         # attempt to load directory structure or synchronize overleaf data.
@@ -1157,7 +1166,7 @@ class MainWindow(QMainWindow):
         * Local/data: "Reload from disk" (no network),
         * Overleaf/network: "Sync with Overleaf" and "Open Overleaf dashboard",
         * Profile/environment: "Change profile folder…",
-        * Help: "Help" and "About" dialogs.
+        * Help: "Help" and "Docs" actions.
         """
         # Reload from disk: re-read local projects info and directory
         # structure without any network access. This is the safest way
@@ -1190,16 +1199,23 @@ class MainWindow(QMainWindow):
         self._change_profile_location_action.setToolTip("Choose a new directory for OverleafFS profiles")
         self._change_profile_location_action.triggered.connect(self._on_change_profile_location)
 
+        # Profile Manager: open a separate window to manage profiles
+        # (create, rename, delete) and choose which profile should be
+        # active. The actual launch is handled in the application
+        # entry point after the main window closes.
+        self._profile_manager_action = QAction("Profile Manager…", self)
+        self._profile_manager_action.setToolTip("Open the OverleafFS profile manager")
+        self._profile_manager_action.triggered.connect(self._on_open_profile_manager)
+
         # Help: brief overview of basic interactions in the GUI.
         self._help_action = QAction("Help", self)
         self._help_action.setToolTip("Show basic usage and status for Overleaf File System")
         self._help_action.triggered.connect(self._on_help)
 
-        # About: show information about this application and its home
-        # on GitHub.
-        self._about_action = QAction("About", self)
-        self._about_action.setToolTip("About Overleaf File System")
-        self._about_action.triggered.connect(self._on_about)
+        # Docs: open OverleafFS documentation.
+        self._docs_action = QAction("Docs", self)
+        self._docs_action.setToolTip("Open OverleafFS documentation")
+        self._docs_action.triggered.connect(self._on_open_docs)
 
         # Pin / Unpin: update the local 'pinned' flag for the selected projects.
         # These actions are exposed via the table's context menu rather than
@@ -1222,7 +1238,9 @@ class MainWindow(QMainWindow):
 
         * "Sync with Overleaf" (primary network action),
         * "Reload from disk" (local refresh),
-        * "Help" (quick access to basic usage information).
+        * "Profile Manager…" (manage and switch profiles),
+        * "Help" (quick access to basic usage information),
+        * "Docs" (documentation).
         """
         toolbar = self.addToolBar("Main")
         toolbar.setObjectName("MainToolbar")
@@ -1232,14 +1250,17 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self._sync_action)
         toolbar.addAction(self._reload_action)
         toolbar.addSeparator()
+        toolbar.addAction(self._profile_manager_action)
+        toolbar.addSeparator()
         toolbar.addAction(self._help_action)
+        toolbar.addAction(self._docs_action)
 
     def _create_menus(self) -> None:
         """Create the main menu bar: File, Overleaf, and Help.
 
         * File: local/data and profile actions,
         * Overleaf: network-related actions,
-        * Help: usage help and About dialog.
+        * Help: usage help and Docs action.
         """
         menubar = self.menuBar()
 
@@ -1248,16 +1269,35 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self._reload_action)
         file_menu.addSeparator()
         file_menu.addAction(self._change_profile_location_action)
+        file_menu.addSeparator()
+        file_menu.addAction(self._profile_manager_action)
 
         # Overleaf menu: network actions.
         overleaf_menu = menubar.addMenu("&Overleaf")
         overleaf_menu.addAction(self._sync_action)
         overleaf_menu.addAction(self._open_dashboard_action)
 
-        # Help menu: usage help and About.
+        # Help menu: usage help and Docs.
         help_menu = menubar.addMenu("&Help")
         help_menu.addAction(self._help_action)
-        help_menu.addAction(self._about_action)
+        help_menu.addAction(self._docs_action)
+
+    def _on_open_profile_manager(self) -> None:
+        """Request launching the Profile Manager and close this window.
+
+        The application entry point (`run`) is responsible for
+        inspecting the `_launch_profile_manager` flag after the event
+        loop exits and, if set, opening the profile manager dialog and
+        then relaunching the main window for the chosen profile.
+        """
+        # Mark that the user wants to manage profiles. The `run` loop
+        # will notice this after the event loop exits.
+        self._launch_profile_manager = True
+
+        # Closing the window will eventually cause the event loop to
+        # return from `app.exec()` when there are no top-level windows
+        # left.
+        self.close()
 
     # ------------------------------------------------------------------
     # Data loading and actions
@@ -1659,6 +1699,7 @@ class MainWindow(QMainWindow):
             "- Use the folder tree on the left to select Home or a specific folder.\n"
             "- Right-click a folder to create, rename, or delete folders.\n"
             "- Drag projects from the table into folders to move them.\n"
+            "- Click in the 'Pin' column to mark a project as visible in the Pinned folder\n"
             "- Double-click a project row to open it in Overleaf.\n"
             "- Double-click 'All Projects' in the tree to open the Overleaf\n"
             "  projects dashboard in your browser.\n\n"
@@ -1674,15 +1715,8 @@ class MainWindow(QMainWindow):
             help_text,
         )
 
-    def _on_about(self) -> None:
-        """Show an About dialog pointing to the GitHub repository."""
-        QMessageBox.information(
-            self,
-            "About Overleaf File System",
-            "Overleaf File System\n\n"
-            "GitHub repository:\n"
-            "https://github.com/gbuzzard/overleaf_fs",
-        )
+    def _on_open_docs(self) -> None:
+        QDesktopServices.openUrl(QUrl("https://overleaf-fs.readthedocs.io/"))
 
     def _on_refresh(self) -> None:
         """Backward-compatible alias for Sync with Overleaf."""
@@ -2240,27 +2274,59 @@ def run() -> None:
 
         from overleaf_fs.gui.main_window import run
         run()
+
+    The function also supports launching the Profile Manager from
+    within the main window and then relaunching the main window for
+    a newly selected profile.
     """
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
 
-    window = MainWindow()
-    window.show()
+    # Import here to avoid circular-import issues at module import
+    # time and to keep the GUI entry point lightweight.
+    from PySide6.QtWidgets import QDialog
+    from overleaf_fs.gui.profile_manager import ProfileManagerDialog
+    from overleaf_fs.core.profiles import set_active_profile_id
 
-    # Perform data initialization (profile root, initial sync, load
-    # projects) after the window is visible so that any dialogs (for
-    # choosing a profile directory or pasting a cookie header) appear
-    # in a clear context.
-    window.initialize_data()
+    while True:
+        window = MainWindow()
+        window.show()
 
-    # If initialization requested an early exit (e.g. the user chose
-    # to exit from an error dialog), do not enter the event loop.
-    if getattr(window, "_should_exit", False):
-        return
+        # Perform data initialization (profile root, initial sync,
+        # load projects) after the window is visible so that any
+        # dialogs (for choosing a profile directory or pasting a
+        # cookie header) appear in a clear context.
+        window.initialize_data()
 
-    # Start the event loop.
-    app.exec()
+        # If initialization requested an early exit (e.g. the user
+        # chose to exit from an error dialog), do not enter the
+        # event loop.
+        if getattr(window, "_should_exit", False):
+            return
+
+        # Start the event loop. This returns when the main window
+        # is closed or the application is quit.
+        app.exec()
+
+        # If the main window has set `_launch_profile_manager`, the
+        # user chose "Profile Manager…". In that case, show the
+        # profile manager dialog and, if a profile is selected,
+        # record it as the active profile and relaunch the main
+        # window. If the dialog is cancelled, exit.
+        if getattr(window, "_launch_profile_manager", False):
+            dlg = ProfileManagerDialog(parent=None)
+            if dlg.exec() == QDialog.Accepted and dlg.selected_profile is not None:
+                set_active_profile_id(dlg.selected_profile.id)
+                # Loop again: create a fresh MainWindow bound to the
+                # newly selected active profile.
+                continue
+            # User cancelled the profile manager; exit the app.
+            return
+
+        # Normal exit: the main window was closed without requesting
+        # the profile manager.
+        break
 
 
 def main() -> None:
