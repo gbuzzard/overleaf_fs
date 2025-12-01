@@ -130,6 +130,7 @@ from overleaf_fs.core.directory_structure_store import (
     rename_folder,
     delete_folder,
     move_projects_to_folder,
+    set_projects_pinned,
 )
 from overleaf_fs.core.config import (
     get_profile_root_dir_optional,
@@ -515,8 +516,15 @@ class MainWindow(QMainWindow):
         if sel_model:
             sel_model.selectionChanged.connect(lambda *_: self._check_external_file_change())
 
+        # Enable a context menu on the project table for actions such as
+        # pinning and unpinning the selected projects.
+        self._table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_table_context_menu)
+
         # Connect double-click to "open project in browser".
         self._table.doubleClicked.connect(self._on_table_double_clicked)
+        # Single-click on the Pinned column toggles the pinned flag for that project.
+        self._table.clicked.connect(self._on_table_clicked)
 
         # Search box above the table.
         self._search = QLineEdit(self)
@@ -883,7 +891,7 @@ class MainWindow(QMainWindow):
         self._table.sortByColumn(ProjectTableModel.COLUMN_LAST_MODIFIED, Qt.DescendingOrder)
         # Give the Name column a wider default width so that longer
         # project titles are visible without immediate manual resizing.
-
+        header.resizeSection(ProjectTableModel.COLUMN_PINNED, 40)
         header.resizeSection(ProjectTableModel.COLUMN_NAME, 250)
         header.resizeSection(ProjectTableModel.COLUMN_OWNER, 150)
 
@@ -1192,6 +1200,20 @@ class MainWindow(QMainWindow):
         self._about_action = QAction("About", self)
         self._about_action.setToolTip("About Overleaf File System")
         self._about_action.triggered.connect(self._on_about)
+
+        # Pin / Unpin: update the local 'pinned' flag for the selected projects.
+        # These actions are exposed via the table's context menu rather than
+        # the main menubar, to keep the core UI focused while still making
+        # pinning easy to discover.
+        self._pin_selected_action = QAction("Pin selected projects", self)
+        self._pin_selected_action.setToolTip("Mark selected projects as pinned in the local directory structure")
+        self._pin_selected_action.triggered.connect(self._on_pin_selected_projects)
+        self.addAction(self._pin_selected_action)
+
+        self._unpin_selected_action = QAction("Unpin selected projects", self)
+        self._unpin_selected_action.setToolTip("Clear the pinned flag for the selected projects")
+        self._unpin_selected_action.triggered.connect(self._on_unpin_selected_projects)
+        self.addAction(self._unpin_selected_action)
 
     def _create_toolbar(self) -> None:
         """Create a toolbar that exposes the key actions prominently.
@@ -2025,6 +2047,58 @@ class MainWindow(QMainWindow):
         overleaf_projects_url = QUrl(f"{base}/project")
         QDesktopServices.openUrl(overleaf_projects_url)
 
+    def _on_table_clicked(self, index: QModelIndex) -> None:
+        """Toggle the pinned flag when the Pinned column is clicked.
+
+        Clicking in the Pinned column for a row updates the local
+        directory structure and reloads the projects so that both the
+        table and the tree (including the Pinned node) reflect the change.
+        """
+        if not index.isValid():
+            return
+
+        # Map from proxy index to the underlying source model index.
+        source_index = self._proxy.mapToSource(index)
+        row = source_index.row()
+        col = source_index.column()
+        if row < 0:
+            return
+
+        from overleaf_fs.gui.project_table_model import ProjectTableModel as _PTM
+        # Only act on clicks in the Pinned column.
+        if col != _PTM.COLUMN_PINNED:
+            return
+
+        record = self._model.project_at(row)
+        if record is None:
+            return
+
+        # Determine the new pinned value by toggling the current one.
+        current_pinned = bool(getattr(record.local, "pinned", False))
+        new_pinned = not current_pinned
+
+        # Obtain the project id from the record.
+        project_id = getattr(record, "id", None)
+        if project_id is None and getattr(record, "remote", None) is not None:
+            project_id = getattr(record.remote, "id", None)
+
+        if not isinstance(project_id, str):
+            return
+
+        try:
+            set_projects_pinned([project_id], new_pinned)
+        except Exception as exc:  # pragma: no cover - defensive
+            QMessageBox.warning(
+                self,
+                "Error updating pinned status",
+                f"Could not update pinned status for the selected project:\n{exc}",
+            )
+            return
+
+        # Reload to reflect the updated pinned flag in both the tree
+        # and the table (including the Pinned virtual folder).
+        self._load_projects()
+
     def _on_table_double_clicked(self, index: QModelIndex) -> None:
         """
         Slot invoked when the user double-clicks a row in the project table.
@@ -2055,6 +2129,104 @@ class MainWindow(QMainWindow):
 
         QDesktopServices.openUrl(QUrl(url_str))
 
+    def _selected_project_ids(self) -> list[str]:
+        """Return the project ids for the currently selected rows in the table.
+
+        The selection is mapped through the proxy model (if present)
+        back to the underlying ``ProjectTableModel`` so that we can
+        access the associated ``ProjectRecord`` instances.
+        """
+        model = self._proxy
+        source_model = self._model
+
+        selection_model = self._table.selectionModel()
+        if selection_model is None:
+            return []
+
+        from overleaf_fs.gui.project_table_model import ProjectTableModel as _PTM
+
+        if not isinstance(source_model, _PTM):
+            return []
+
+        project_ids: list[str] = []
+        selected_rows = selection_model.selectedRows()
+        for proxy_index in selected_rows:
+            if not proxy_index.isValid():
+                continue
+            source_index = model.mapToSource(proxy_index)
+            row = source_index.row()
+            if row < 0:
+                continue
+
+            record = source_model.project_at(row)
+            if record is None:
+                continue
+
+            # Prefer a direct id attribute; fall back to remote.id if needed.
+            project_id = getattr(record, "id", None)
+            if project_id is None and getattr(record, "remote", None) is not None:
+                project_id = getattr(record.remote, "id", None)
+
+            if isinstance(project_id, str):
+                project_ids.append(project_id)
+
+        return project_ids
+
+    def _on_pin_selected_projects(self) -> None:
+        """Mark the selected projects as pinned and reload the view."""
+        project_ids = self._selected_project_ids()
+        if not project_ids:
+            return
+
+        try:
+            set_projects_pinned(project_ids, True)
+        except Exception as exc:  # pragma: no cover - defensive
+            QMessageBox.warning(
+                self,
+                "Error pinning projects",
+                f"Could not update pinned status for the selected projects:\n{exc}",
+            )
+            return
+
+        # Reload to reflect the updated pinned flags in both the tree
+        # and the table (including the Pinned virtual folder).
+        self._load_projects()
+
+    def _on_unpin_selected_projects(self) -> None:
+        """Clear the pinned flag for the selected projects and reload the view."""
+        project_ids = self._selected_project_ids()
+        if not project_ids:
+            return
+
+        try:
+            set_projects_pinned(project_ids, False)
+        except Exception as exc:  # pragma: no cover - defensive
+            QMessageBox.warning(
+                self,
+                "Error unpinning projects",
+                f"Could not update pinned status for the selected projects:\n{exc}",
+            )
+            return
+
+        self._load_projects()
+
+    def _on_table_context_menu(self, pos: QPoint) -> None:
+        """Show a context menu for the project table with pin/unpin actions.
+
+        The menu is only shown when there is at least one selected row.
+        """
+        project_ids = self._selected_project_ids()
+        if not project_ids:
+            return
+
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.addAction(self._pin_selected_action)
+        menu.addAction(self._unpin_selected_action)
+
+        global_pos = self._table.viewport().mapToGlobal(pos)
+        menu.exec(global_pos)
     # ------------------------------------------------------------------
     # Application entry points
     # ------------------------------------------------------------------

@@ -51,12 +51,14 @@ class ProjectTableModel(QAbstractTableModel):
     """
 
     # Column indices for clarity and to avoid magic numbers.
-    COLUMN_NAME = 0
-    COLUMN_OWNER = 1
-    COLUMN_LAST_MODIFIED = 2
+    COLUMN_PINNED = 0
+    COLUMN_NAME = 1
+    COLUMN_OWNER = 2
     COLUMN_FOLDER = 3
+    COLUMN_LAST_MODIFIED = 4
 
     _COLUMN_DEFINITIONS = [
+        (COLUMN_PINNED, "Pin"),
         (COLUMN_NAME, "Name"),
         (COLUMN_OWNER, "Owner"),
         (COLUMN_LAST_MODIFIED, "Last modified"),
@@ -142,6 +144,8 @@ class ProjectTableModel(QAbstractTableModel):
         record = self._records[row]
 
         if role == Qt.DisplayRole:
+            if col == self.COLUMN_PINNED:
+                return "★" if record.local.pinned else ""
             if col == self.COLUMN_NAME:
                 return record.remote.name
             if col == self.COLUMN_OWNER:
@@ -176,6 +180,8 @@ class ProjectTableModel(QAbstractTableModel):
                 return QColor(Qt.darkGray)
 
         if role == Qt.TextAlignmentRole:
+            if col == self.COLUMN_PINNED:
+                return int(Qt.AlignVCenter | Qt.AlignCenter)
             # Left-align text in all columns for now.
             return int(Qt.AlignVCenter | Qt.AlignLeft)
 

@@ -468,3 +468,50 @@ def move_projects_to_folder(
 
     save_directory_structure(loc_dir_struct, path)
     return loc_dir_struct
+
+
+def set_projects_pinned(
+    project_ids: Iterable[str],
+    pinned: bool,
+    path: Optional[Path] = None,
+) -> LocalDirectoryStructure:
+    """Set the ``pinned`` flag for the given projects and save the result.
+
+    This helper loads the current directory-structure JSON, updates
+    ``ProjectLocal.pinned`` for each project id in ``project_ids``, and
+    writes the modified structure back to disk.
+
+    Semantics:
+
+    * If a project id does not yet have a ``ProjectLocal`` entry, one is
+      created with default values for folder/notes/hidden and the requested
+      ``pinned`` value.
+    * Existing ``ProjectLocal`` entries are updated in place; only the
+      ``pinned`` field is modified.
+
+    Args:
+        project_ids (Iterable[str]): Project ids whose pinned status will
+            be updated.
+        pinned (bool): Desired value for the pinned flag.
+        path (Optional[Path]): Optional explicit JSON path. If omitted,
+            the default directory-structure path is used.
+
+    Returns:
+        LocalDirectoryStructure: The updated local directory structure after
+        modifying the pinned flags.
+    """
+    loc_dir_struct = load_directory_structure(path)
+
+    for proj_id in project_ids:
+        if not isinstance(proj_id, str):
+            continue
+        local = loc_dir_struct.projects.get(proj_id)
+        if local is None:
+            # Create a new ProjectLocal with the requested pinned value.
+            local = ProjectLocal(folder=None, notes=None, pinned=pinned, hidden=False)
+            loc_dir_struct.projects[proj_id] = local
+        else:
+            local.pinned = pinned
+
+    save_directory_structure(loc_dir_struct, path)
+    return loc_dir_struct
