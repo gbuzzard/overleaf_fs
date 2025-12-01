@@ -82,4 +82,5 @@ OverleafFS: GUI-based project browser for Overleaf LaTeX Projects
    :caption: Developer Guide
 
    dev_overview
+   dev_maintenance
 

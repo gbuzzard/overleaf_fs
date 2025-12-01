@@ -35,11 +35,7 @@ docs = [
      "sphinx-copybutton"
 ]
 dev = [
-    "setuptools",
-    "build",
-    "wheel",
-    "twine",
-    "pkginfo"
+    "build"
 ]
 
 [tool.setuptools.packages]
