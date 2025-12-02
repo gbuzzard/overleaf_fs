@@ -32,7 +32,38 @@ from typing import List, Optional
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QColor
 
+from datetime import datetime
+
 from overleaf_fs.core.models import ProjectsIndex, ProjectRecord
+
+
+def _format_last_modified_local(remote) -> str:
+    """
+    Format the remote last-modified timestamp in local time, if possible.
+
+    If a parsed datetime object is available on ``remote.last_modified``,
+    it is converted to the local timezone (when timezone-aware) and
+    formatted as ``YYYY-MM-DD HH:MM:SS``. If no parsed datetime is
+    available, fall back to the raw string reported by Overleaf.
+    """
+    dt = getattr(remote, "last_modified", None)
+    if dt is not None:
+        try:
+            # If the datetime is timezone-aware, convert to local time;
+            # otherwise, assume it is already in local time.
+            if isinstance(dt, datetime) and dt.tzinfo is not None:
+                local_dt = dt.astimezone()
+            else:
+                local_dt = dt
+            return local_dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            # As a fallback, use ISO formatting similar to the previous behavior.
+            try:
+                return dt.isoformat(sep=" ", timespec="seconds")
+            except Exception:
+                pass
+    # Fall back to the raw string if no parsed datetime is available.
+    return getattr(remote, "last_modified_raw", "") or ""
 
 
 class ProjectTableModel(QAbstractTableModel):
@@ -159,13 +190,10 @@ class ProjectTableModel(QAbstractTableModel):
                 # Fall back to whichever identifier we have.
                 return display_name or owner_label or ""
             if col == self.COLUMN_LAST_MODIFIED:
-                # Prefer the parsed datetime if available; otherwise fall back to the
-                # raw string reported by Overleaf in the remote projects‑info data.
-                if record.remote.last_modified is not None:
-                    return record.remote.last_modified.isoformat(
-                        sep=" ", timespec="seconds"
-                    )
-                return record.remote.last_modified_raw or ""
+                # Prefer the parsed datetime and display it in local time if
+                # available; otherwise fall back to the raw string reported
+                # by Overleaf in the remote projects-info data.
+                return _format_last_modified_local(record.remote)
             if col == self.COLUMN_FOLDER:
                 # Show the local folder assignment from the directory‑structure fields,
                 # treating the Home folder (no explicit folder) as "Home" for readability.
@@ -198,11 +226,9 @@ class ProjectTableModel(QAbstractTableModel):
             else:
                 owner_str = owner_display or owner_label or ""
 
-            # Prefer the parsed datetime for the tooltip as well.
-            if remote.last_modified is not None:
-                last_mod_str = remote.last_modified.isoformat(sep=" ", timespec="seconds")
-            else:
-                last_mod_str = remote.last_modified_raw or ""
+            # Prefer the parsed datetime for the tooltip as well, formatted
+            # in local time when possible.
+            last_mod_str = _format_last_modified_local(remote)
 
             folder = local.folder if local.folder not in (None, "") else "Home"
             archived_str = "Yes" if getattr(remote, "archived", False) else "No"

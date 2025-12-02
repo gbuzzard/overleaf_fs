@@ -52,6 +52,25 @@ Views and models
     * `ProjectTableModel` (source model),
     * `_ProjectSortFilterProxyModel` (sorting + text & folder filters).
 
+Proxy models
+------------
+A *proxy model* in Qt is a lightweight wrapper that sits between a view and
+its underlying data model. It does not store its own dataset; instead, it
+forwards requests to the real model while adding behaviors such as sorting,
+filtering, column reordering, or data transformation.
+
+In OverleafFS, ``_ProjectSortFilterProxyModel`` wraps the main
+``ProjectTableModel`` to provide:
+
+* **Sorting** — users can click table headers to sort projects without
+  affecting the underlying data.
+* **Filtering** — the proxy hides or shows rows based on both the currently
+  selected folder in the tree and the text entered in the search bar.
+
+The project table view always communicates through the proxy rather than
+directly with ``ProjectTableModel``. This ensures that sorting and filtering
+behavior stays consistent even when the underlying project data is reloaded.
+
 Interaction flow
 ----------------
 - Selecting a folder updates the proxy model to display only the projects
@@ -724,62 +743,11 @@ class MainWindow(QMainWindow):
         # their existing folder structure and projects (if any).
         self._on_reload_from_disk()
 
-        # Then, try to perform an initial sync from Overleaf. This may
-        # prompt for login if no valid cookie is available.
-        self._initial_sync_from_overleaf()
+        # Then, try to perform a sync from Overleaf. This may prompt
+        # for login if no valid cookie is available.
+        self._on_sync_with_overleaf()
 
-    def _initial_sync_from_overleaf(self) -> None:
-        """Attempt an initial Overleaf sync for the active profile.
-
-        This is called once on startup after local projects and
-        directory structure have been loaded from disk. If a valid
-        cookie is available, it refreshes the remote project list. If
-        no cookie is available or the saved cookie has expired, the
-        user is offered the option to log in via the embedded browser.
-        """
-        try:
-            # Try with whatever cookie (if any) is already stored.
-            sync_overleaf_projects_for_active_profile()
-        except CookieRequiredError:
-            # Either no cookie has ever been saved, or the saved cookie
-            # is no longer accepted by Overleaf.
-            if not self._confirm_overleaf_login():
-                # User chose not to log in right now; keep the current
-                # on-disk view.
-                return
-
-            cookie, remember = self._prompt_for_cookie_header()
-            if not cookie:
-                # Login dialog was cancelled.
-                return
-
-            try:
-                sync_overleaf_projects_for_active_profile(
-                    cookie_header=cookie,
-                    remember_cookie=remember,
-                )
-            except CookieRequiredError:
-                # Even with a freshly obtained cookie, Overleaf rejected
-                # the request. For now we simply leave the local data
-                # as-is; a future sync attempt may succeed.
-                return
-            except Exception as exc:  # pragma: no cover - defensive
-                # Treat all other errors (network, parsing, etc.) via a
-                # single helper so the user can decide whether to
-                # continue with local data or exit the app.
-                self._handle_sync_error(exc)
-                return
-        except Exception as exc:  # pragma: no cover - defensive
-            # Any non-cookie-related errors during the initial attempt
-            # are handled in the same way: offer the choice to continue
-            # with local data or exit.
-            self._handle_sync_error(exc)
-            return
-
-        # On success, record the sync time and reload from disk so the UI
-        # reflects the new data.
-        self._set_last_synced_now()
-        self._on_reload_from_disk()
+    # _initial_sync_from_overleaf removed; unified into _on_sync_with_overleaf
 
     # ------------------------------------------------------------------
     # UI setup helpers
@@ -1193,6 +1161,13 @@ class MainWindow(QMainWindow):
                 # in that case we simply leave whatever selection Qt chooses.
                 pass
 
+            # Ensure the proxy model's folder filter matches the restored
+            # selection, even if the tree did not emit a selection-changed
+            # signal (for example, when the same node remains selected).
+            if isinstance(current_key, (str, type(None))):
+                self._current_folder_key = current_key
+                self._proxy.setFolderKey(current_key)
+
             # Record that we have just loaded projects and directory structure from disk.
             self._set_last_loaded_now()
 
@@ -1219,15 +1194,32 @@ class MainWindow(QMainWindow):
         self._load_projects()
 
     def _on_sync_with_overleaf(self) -> None:
-        """Trigger a manual sync with Overleaf for the active profile."""
+        """Synchronize the active profile with Overleaf and reload on success.
+
+        This method is used both on startup (via ``initialize_data``)
+        and when the user clicks the "Sync with Overleaf" toolbar
+        action. If a valid cookie is available, it refreshes the remote
+        project list. If no cookie is available or the saved cookie has
+        expired, the user is offered the option to log in via the
+        embedded browser and capture a fresh cookie.
+
+        On success, the sync timestamp is updated and the local cache
+        is reloaded from disk so that the UI reflects the new data.
+        """
         try:
+            # Try with whatever cookie (if any) is already stored.
             sync_overleaf_projects_for_active_profile()
         except CookieRequiredError:
+            # Either no cookie has ever been saved, or the saved cookie
+            # is no longer accepted by Overleaf.
             if not self._confirm_overleaf_login():
+                # User chose not to log in right now; keep the current
+                # on-disk view.
                 return
 
             cookie, remember = self._prompt_for_cookie_header()
             if not cookie:
+                # Login dialog was cancelled.
                 return
 
             try:
@@ -1236,18 +1228,27 @@ class MainWindow(QMainWindow):
                     remember_cookie=remember,
                 )
             except CookieRequiredError:
-                # If this still fails, we quietly keep the last-saved data.
+                # Even with a freshly obtained cookie, Overleaf rejected
+                # the request. For now we simply leave the local data
+                # as-is; a future sync attempt may succeed.
                 return
             except Exception as exc:  # pragma: no cover - defensive
+                # Treat all other errors (network, parsing, etc.) via a
+                # single helper so the user can decide whether to
+                # continue with local data or exit the app.
                 self._handle_sync_error(exc)
                 return
-            except Exception as exc:  # pragma: no cover - defensive
-                self._handle_sync_error(exc)
-                return
+        except Exception as exc:  # pragma: no cover - defensive
+            # Any non-cookie-related errors during the sync attempt are
+            # handled in the same way: offer the choice to continue
+            # with local data or exit.
+            self._handle_sync_error(exc)
+            return
 
-            # Successful sync; record timestamp and reload from disk.
-            self._set_last_synced_now()
-            self._on_reload_from_disk()
+        # On success, record the sync time and reload from disk so the UI
+        # reflects the new data.
+        self._set_last_synced_now()
+        self._on_reload_from_disk()
 
     def _handle_sync_error(self, exc: Exception) -> None:
         """Handle errors that occur during Overleaf sync operations.
@@ -1485,9 +1486,24 @@ class MainWindow(QMainWindow):
         projects-info or directory-structure data changed externally
         (e.g., due to edits on this or another machine) and, if so,
         offers to reload from disk.
+
+        If a reload was performed, the tree selection is explicitly
+        updated to match the folder that was just clicked so that the
+        tree highlight and the table filter remain in sync.
         """
-        self._check_external_file_change()
-        # Proceed normally regardless; reload already applied if chosen.
+        reload_triggered = self._check_external_file_change()
+
+        # If an external-change reload rebuilt the tree, it may have
+        # restored the previous folder selection rather than the one
+        # the user just clicked. Re-assert the clicked key so that the
+        # tree highlight and proxy filter align with the user's choice.
+        if reload_triggered:
+            try:
+                self._tree.select_folder_key(key)
+            except AttributeError:
+                # Older ProjectTree versions may not expose select_folder_key.
+                pass
+
         if not isinstance(key, (str, type(None))):
             return
 
@@ -1988,3 +2004,7 @@ def main() -> None:
     of the codebase.
     """
     run()
+
+
+if __name__ == "__main__":
+    main()
