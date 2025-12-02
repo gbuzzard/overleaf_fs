@@ -9,11 +9,7 @@ on:
 jobs:
   build-binaries:
     name: Build PyInstaller binaries
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [macos-latest, windows-latest]
-        python-version: ["3.11"]
+    runs-on: windows-latest
 
     steps:
       - name: Checkout repository
@@ -22,7 +18,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -33,37 +29,20 @@ jobs:
           python -m pip install pyinstaller
         shell: bash
 
-      - name: Build OverleafFS binary with PyInstaller
+      - name: Build OverleafFS binary with PyInstaller (Windows)
         run: |
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            pyinstaller \
-              --name OverleafFS \
-              --windowed \
-              --icon assets/OverleafFS.icns \
-              -p . \
-              overleaf_fs/gui/main_window.py
-          else
-            pyinstaller \
-              --name OverleafFS \
-              --onefile \
-              --windowed \
-              --icon assets/OverleafFS.ico \
-              -p . \
-              overleaf_fs/gui/main_window.py
-          fi
+          pyinstaller \
+            --name OverleafFS \
+            --onefile \
+            --windowed \
+            --icon assets/OverleafFS.ico \
+            -p . \
+            overleaf_fs/gui/main_window.py
         shell: bash
-
-      - name: Package macOS app
-        if: matrix.os == 'macos-latest'
-        run: |
-          cd dist
-          zip -r OverleafFS-macOS-${{ github.ref_name }}.zip OverleafFS.app
 
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OverleafFS-${{ matrix.os }}-${{ github.ref_name }}
-          path: |
-            dist/OverleafFS.exe
-            dist/OverleafFS-macOS-${{ github.ref_name }}.zip
-          if-no-files-found: ignore
+          name: OverleafFS-windows-${{ github.ref_name }}
+          path: dist/OverleafFS.exe
+          if-no-files-found: error
