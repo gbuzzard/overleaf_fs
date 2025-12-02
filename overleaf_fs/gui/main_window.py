@@ -2004,3 +2004,7 @@ def main() -> None:
     of the codebase.
     """
     run()
+
+
+if __name__ == "__main__":
+    main()
