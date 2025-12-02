@@ -4,6 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "overleaf_fs"
+
+# === Release instructions ===
+# 1. Update version number below (X.Y.Z) and commit the change.
+#    Push the main branch so the tagged commit is on GitHub:
+#      git push origin main
+#    The tag in step 2 must match this version.
+# 2. Create the tag and push it.
+#   git tag vX.Y.Z
+#   git push origin vX.Y.Z
+# 3. Create a GitHub Release.
+#    Go to the Releases page in the GitHub repository
+#    Click “Draft a new release”
+#    Select the tag (e.g. vX.Y.Z)
+#    Give the release a title and (optionally) release notes
+#    Click Publish release
+# 4. GitHub Actions will publish to PyPI.
 version = "0.1.2"
 description = "GUI-based project organization for Overleaf"
 keywords = ["overleaf", "file system"]
