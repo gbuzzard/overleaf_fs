@@ -58,6 +58,7 @@ dev = [
 find = {}
 
 [project.urls]
+homepage = "https://overleaf-fs.readthedocs.io"
 source = "https://github.com/gbuzzard/overleaf_fs"
 
 [project.scripts]
