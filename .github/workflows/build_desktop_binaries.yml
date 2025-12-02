@@ -1,0 +1,64 @@
+name: Build desktop binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-binaries:
+    name: Build PyInstaller binaries
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install the package (and its runtime deps) from pyproject.toml
+          python -m pip install .
+          # Install PyInstaller itself
+          python -m pip install pyinstaller
+        shell: bash
+
+      - name: Build OverleafFS binary with PyInstaller
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            pyinstaller \
+              --name OverleafFS \
+              --windowed \
+              --icon assets/OverleafFS.icns \
+              -p . \
+              overleaf_fs/gui/main_window.py
+          else
+            pyinstaller \
+              --name OverleafFS \
+              --onefile \
+              --windowed \
+              --icon assets/OverleafFS.ico \
+              -p . \
+              overleaf_fs/gui/main_window.py
+          fi
+        shell: bash
+
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OverleafFS-${{ matrix.os }}-${{ github.ref_name }}
+          path: |
+            dist/OverleafFS.exe
+            dist/OverleafFS
+            dist/OverleafFS.app
+          if-no-files-found: ignore
