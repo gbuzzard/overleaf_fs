@@ -53,12 +53,17 @@ jobs:
           fi
         shell: bash
 
+      - name: Package macOS app
+        if: matrix.os == 'macos-latest'
+        run: |
+          cd dist
+          zip -r OverleafFS-macOS-${{ github.ref_name }}.zip OverleafFS.app
+
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4
         with:
           name: OverleafFS-${{ matrix.os }}-${{ github.ref_name }}
           path: |
             dist/OverleafFS.exe
-            dist/OverleafFS
-            dist/OverleafFS.app
+            dist/OverleafFS-macOS-${{ github.ref_name }}.zip
           if-no-files-found: ignore
