@@ -1,5 +1,3 @@
-
-
 ==================
 Developer Overview
 ==================
@@ -126,6 +124,18 @@ information with local directory-structure data.
     * ``ProjectRecord.local`` is preserved across refreshes and reflects
       the user’s local organization and annotations.
 
+* ``overleaf_fs/core/profiles.py``
+
+  Profile management and profile-level storage configuration.
+
+  - Defines ``ProfileInfo`` and helpers for discovering, creating, renaming,
+    and deleting profiles under the profile root directory.
+  - Stores and retrieves the active profile via ``active_profile.json``.
+  - Provides ``get_active_profile_info()`` and related helpers used at
+    startup to ensure that an active profile always exists.
+  - Encapsulates all logic for paths and filenames inside profile-level
+    subdirectories.
+
 GUI layer (``overleaf_fs.gui``)
 -------------------------------
 
@@ -144,11 +154,38 @@ models.
   The main application window and high-level GUI controller.
 
   - Owns the project tree (folders) and project table widgets.
+  - Initializes the profile subsystem: ensures a valid profile root exists
+    and calls ``get_active_profile_info()`` so that an active profile is
+    always available on startup.
   - Connects user actions (selection, drag-and-drop, sync buttons) to
     core-layer operations such as ``load_projects_index()``,
     ``load_directory_structure()``, and Overleaf refresh calls.
   - Implements external-change detection for the metadata JSON files and
     offers to reload when they change on disk.
+
+* ``overleaf_fs/gui/profile_manager.py``
+
+  Profile selection and management dialog.
+
+  - Allows the user to select, create, rename, delete, or open a profile.
+  - Provides a "Move…" action to relocate the entire profile-storage
+    folder, using shared UI helpers.
+  - Ensures that the current active profile is restored when the
+    user presses Cancel.
+  - Delegates disk‑level path changes to the core config layer.
+
+* ``overleaf_fs/gui/profile_root_ui.py``
+
+  Shared UI helpers for selecting or relocating the profile root directory.
+
+  - Presents the explanatory message shown when choosing a profile
+    storage folder.
+  - Configures a non-native directory chooser dialog with cloud-storage
+    sidebar entries.
+  - Provides ``choose_profile_root_directory()`` for both first‑run setup
+    and the profile manager's Move… flow.
+  - Includes ``looks_like_profile_root()`` which detects whether a folder
+    already contains OverleafFS profile data.
 
 * ``overleaf_fs/gui/overleaf_login.py``
 
@@ -203,3 +240,6 @@ Notes for future maintenance
 - When evolving the on-disk format, update ``FILE_FORMAT_VERSION`` and
   document any migration steps here so that future refactors remain
   understandable.
+- Keep profile-handling logic centralized in ``profiles.py`` and route
+  all profile‑root selection through ``profile_root_ui.py`` to avoid
+  duplicating UI flows.

@@ -1,5 +1,3 @@
-
-
 Features
 ========
 
@@ -15,7 +13,7 @@ OverleafFS is a desktop application that synchronizes your Overleaf
 projects with a local, browsable workspace. It provides:
 
 * A unified tree view of your Overleaf folders and projects
-* Local organization tools (folders, pinned/archived flags)
+* Local organization tools (folders, pinned projects)
 * Automatic syncing of Overleaf project lists using your saved login
 * Drag‑and‑drop project management
 * Multi‑profile support (e.g., work and personal projects)
@@ -28,6 +26,8 @@ iCloud, or similar services.
 Key Features
 ------------
 
+The sections below summarize the main functionality exposed in the application.
+
 Project Browser
 ~~~~~~~~~~~~~~~
 
@@ -38,6 +38,8 @@ A few highlights:
 * **Expand / collapse folders** to navigate quickly.
 * **Drag projects into folders** to reorganize them locally.
 * **Pin projects** to keep them visible at the top of their folder.
+
+* **Open on Overleaf**: double-clicking a project opens it in your default web browser.
 
 Hovering over any project displays a multi‑line summary including
 owner, folder, last modified time, and project URL.
@@ -50,8 +52,7 @@ OverleafFS maintains a local *directory‑structure* file that contains:
 * The directory structure you create through OverleafFS
 * Each project’s folder assignment and Overleaf ID
 
-These are entirely local to your machine (or shared storage) and do not
-modify anything on Overleaf.
+These settings are stored locally (or in your cloud-synced profile root) and do not change your Overleaf folders.
 
 You can:
 
@@ -66,6 +67,8 @@ Syncing With Overleaf
 
 When you first log in using the embedded browser, OverleafFS captures
 your Overleaf session cookie and uses it for automatic project refreshes.
+
+Your login cookie is stored inside your active profile so each profile can maintain its own Overleaf session.
 
 OverleafFS automatically synchronizes:
 
@@ -90,12 +93,16 @@ your chosen profile root. This allows you to maintain:
 The profile root can live inside a cloud‑synced directory if you want
 your organization to follow you across devices.
 
+You can relocate the entire profile root using the Profile Manager’s *Move…* command.
+
 Reloading Local Data
 ~~~~~~~~~~~~~~~~~~~~
 
 If you edit the JSON files outside the application or switch machines,
 you can select *Reload from Disk* to import the updated directory‑structure
 information without touching the Overleaf sync.
+
+This does not affect your Overleaf project list; only local structure is reloaded.
 
 Search and Filtering
 ~~~~~~~~~~~~~~~~~~~~
@@ -105,6 +112,8 @@ The search box filters projects across the full list using:
 * Project name
 * Owner display name
 * Owner email/login
+
+Search is case-insensitive and matches substrings in any of these fields.
 
 This makes it easy to find a project even with a vague query.
 

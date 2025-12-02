@@ -101,7 +101,7 @@ This final step triggers the GitHub Actions workflow that builds and
 publishes the new version to PyPI.
 
 GitHub–PyPI Integration (Trusted Publisher)
-==========================================
+===========================================
 
 Publishing is handled by a GitHub Actions workflow configured as a
 *Trusted Publisher* on PyPI (see https://pypi.org/manage/account/publishing/).

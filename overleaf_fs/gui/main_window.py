@@ -477,7 +477,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Overleaf File System")
+        self.setWindowTitle("Overleaf FS")
 
         # Per-machine UI settings (e.g. expanded folders) are stored via
         # QSettings so that basic view state is restored across restarts
@@ -716,7 +716,9 @@ class MainWindow(QMainWindow):
         self._ensure_profile_root_dir()
 
         # After ensuring we have a profile root:
-        get_active_profile_info()
+        info = get_active_profile_info()
+        display_name = info.display_name
+        self.setWindowTitle("Overleaf FS: Profile = {}".format(display_name))
 
         # First, load what we have on disk so the user immediately sees
         # their existing folder structure and projects (if any).

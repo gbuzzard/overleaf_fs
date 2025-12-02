@@ -15,6 +15,11 @@ Typical usage from the application entrypoint::
         if selected is not None:
             # Call set_active_profile_id(selected.id) in core.profiles
             # and then relaunch the main window bound to that profile.
+            pass
+        # If the user clicked "Cancel", ``selected`` will be the profile
+        # that was active when the dialog was opened (if any), so the
+        # caller can simply relaunch the main window using ``selected``
+        # without special-casing Cancel.
 
 The dialog itself does *not* change the active profile; it simply lets
 the caller know which profile the user chose.
@@ -48,6 +53,7 @@ from overleaf_fs.core.profiles import (
     save_profile_info,
     load_profile_info,
     PROFILE_CONFIG_FILENAME,
+    get_active_profile_info,
 )
 
 from pathlib import Path
@@ -98,7 +104,7 @@ class ProfileManagerDialog(QDialog):
         self._list = QListWidget(self)
         self._list.setSelectionMode(QListWidget.SingleSelection)
 
-        # Buttons along the bottom: Open, Rename, New, Move, Delete, Exit.
+        # Buttons along the bottom: Open, Rename, New, Move, Delete, Cancel, Exit.
         self._open_button = QPushButton("Open", self)
         self._rename_button = QPushButton("Rename…", self)
         self._new_button = QPushButton("New…", self)
@@ -110,12 +116,14 @@ class ProfileManagerDialog(QDialog):
         # Make the delete button visually distinct to emphasize that it
         # is a destructive operation.
         self._delete_button.setStyleSheet("color: red;")
+        self._cancel_button = QPushButton("Cancel", self)
         self._exit_button = QPushButton("Exit app", self)
 
         self._open_button.clicked.connect(self._on_open_clicked)
         self._rename_button.clicked.connect(self._on_rename_profile)
         self._new_button.clicked.connect(self._on_new_profile)
         self._move_button.clicked.connect(self._on_move_root)
+        self._cancel_button.clicked.connect(self._on_cancel_clicked)
         self._delete_button.clicked.connect(self._on_delete_profile)
         self._exit_button.clicked.connect(self.reject)
 
@@ -132,13 +140,25 @@ class ProfileManagerDialog(QDialog):
         button_row.addWidget(self._new_button)
         button_row.addWidget(self._move_button)
         button_row.addWidget(self._delete_button)
+        button_row.addWidget(self._cancel_button)
         button_row.addWidget(self._exit_button)
 
         main_layout.addLayout(button_row)
 
         self._selected_profile: Optional[ProfileInfo] = None
+        self._initial_profile: Optional[ProfileInfo] = None
 
         self._refresh_profiles()
+
+        # Remember the profile that was active when the dialog was opened.
+        # This allows the Cancel button to return to that profile instead
+        # of exiting the application.
+        try:
+            self._initial_profile = get_active_profile_info()
+        except Exception:
+            # If we cannot determine an active profile for any reason,
+            # leave this as None and let the caller handle the default.
+            self._initial_profile = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -410,13 +430,12 @@ class ProfileManagerDialog(QDialog):
         )
 
     def _on_delete_profile(self) -> None:
-        """Delete the configuration for the currently selected profile.
+        """Delete the directory for the currently selected profile.
 
-        This performs a *soft* delete: the profile-config JSON file is
-        removed, so the profile no longer appears in the profile
-        manager, but the underlying directory and data files (such as
-        ``overleaf_projects_info.json`` and
-        ``local_directory_structure.json``) are left untouched.
+        This performs a full delete of the profile directory under the
+        profile root. The profile configuration and all data files
+        within that directory (such as ``overleaf_projects_info.json``
+        and ``local_directory_structure.json``) are removed.
         """
 
         info = self._load_current_profile()
@@ -427,8 +446,8 @@ class ProfileManagerDialog(QDialog):
             self,
             "Delete profile",
             f"Really delete profile '{info.display_name}' (id: {info.id})?\n\n"
-            "This removes the profile configuration so it no longer appears "
-            "in the manager, but leaves the underlying files on disk.",
+            "This will remove the entire profile directory under the profile "
+            "root, including the profile configuration and all data files.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -437,15 +456,14 @@ class ProfileManagerDialog(QDialog):
 
         root = config.get_profile_root_dir()
         profile_dir = root / info.id
-        cfg_path = profile_dir / PROFILE_CONFIG_FILENAME
         try:
-            if cfg_path.is_file():
-                cfg_path.unlink()
+            if profile_dir.exists():
+                shutil.rmtree(profile_dir)
         except Exception as exc:  # pragma: no cover - defensive
             QMessageBox.warning(
                 self,
                 "Error deleting profile",
-                f"Could not delete profile configuration:\n{exc}",
+                f"Could not delete profile directory:\n{exc}",
             )
             return
 
@@ -475,3 +493,18 @@ class ProfileManagerDialog(QDialog):
         if row >= 0:
             self._list.setCurrentRow(row)
         self._on_open_clicked()
+
+    def _on_cancel_clicked(self) -> None:
+        """Close the dialog and keep using the current active profile.
+
+        This is intended for the common case where the user wants to
+        return to the main application using the most recently active
+        profile. The dialog is accepted, and ``selected_profile`` is
+        set back to the profile that was active when the dialog was
+        opened (if known), so callers can distinguish between "open
+        this profile" and "keep the existing active profile".
+        """
+        # Restore the initially active profile (if we know it) so that
+        # callers can simply check ``selected_profile`` after exec().
+        self._selected_profile = self._initial_profile
+        self.accept()
