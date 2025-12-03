@@ -51,6 +51,7 @@ docs = [
      "sphinx-copybutton"
 ]
 dev = [
+    "pyinstaller",
     "build"
 ]
 
