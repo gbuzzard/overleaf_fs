@@ -1,9 +1,9 @@
 name: Build desktop binaries
 
 on:
-  push:
-    tags:
-      - "v*"
+  # Build/upload binaries automatically when a GitHub Release is published
+  release:
+    types: [published]
   workflow_dispatch:
 
 jobs:
