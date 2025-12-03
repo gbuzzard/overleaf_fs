@@ -9,7 +9,11 @@ on:
 jobs:
   build-binaries:
     name: Build PyInstaller binaries
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+        python-version: ["3.11"]
 
     steps:
       - name: Checkout repository
@@ -18,7 +22,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
@@ -29,20 +33,40 @@ jobs:
           python -m pip install pyinstaller
         shell: bash
 
-      - name: Build OverleafFS binary with PyInstaller (Windows)
+      - name: Build OverleafFS binary with PyInstaller
         run: |
-          pyinstaller \
-            --name OverleafFS \
-            --onefile \
-            --windowed \
-            --icon assets/OverleafFS.ico \
-            -p . \
-            overleaf_fs/gui/main_window.py
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            pyinstaller \
+              --name OverleafFS \
+              --windowed \
+              --icon assets/OverleafFS.icns \
+              -p . \
+              overleaf_fs/gui/main_window.py
+          else
+            pyinstaller \
+              --name OverleafFS \
+              --onefile \
+              --windowed \
+              --icon assets/OverleafFS.ico \
+              -p . \
+              overleaf_fs/gui/main_window.py
+          fi
         shell: bash
+
+      - name: Package macOS app
+        if: matrix.os == 'macos-latest'
+        run: |
+          cd dist
+          rm -f OverleafFS-macOS-${{ github.ref_name }}.zip
+          # Use ditto to mimic Finder's "Compress" behavior, preserving
+          # hard links and resource forks without blowing up size.
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "OverleafFS.app" "OverleafFS-macOS-${{ github.ref_name }}.zip"
 
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: OverleafFS-windows-${{ github.ref_name }}
-          path: dist/OverleafFS.exe
-          if-no-files-found: error
+          name: OverleafFS-${{ matrix.os }}-${{ github.ref_name }}
+          path: |
+            dist/OverleafFS.exe
+            dist/OverleafFS-macOS-${{ github.ref_name }}.zip
+          if-no-files-found: ignore
