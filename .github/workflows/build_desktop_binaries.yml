@@ -10,6 +10,8 @@ jobs:
   build-binaries:
     name: Build PyInstaller binaries
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write  # needed to create/update GitHub Releases
     strategy:
       matrix:
         os: [macos-latest, windows-latest]
@@ -70,3 +72,15 @@ jobs:
             dist/OverleafFS.exe
             dist/OverleafFS-macOS-${{ github.ref_name }}.zip
           if-no-files-found: ignore
+
+      - name: Upload Windows binary to GitHub Release
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/OverleafFS.exe
+
+      - name: Upload macOS app zip to GitHub Release
+        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/OverleafFS-macOS-${{ github.ref_name }}.zip
