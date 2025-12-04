@@ -120,7 +120,10 @@ from datetime import datetime
 from typing import Optional
 import requests
 
-from PySide6.QtCore import Qt, QUrl, QModelIndex, QSortFilterProxyModel, QMimeData, QPoint, QSettings, Signal, QEvent
+from PySide6.QtCore import (
+    Qt, QUrl, QModelIndex, QSortFilterProxyModel,
+    QMimeData, QPoint, QSettings, Signal, QEvent, QTimer,
+)
 from PySide6.QtGui import QAction, QDesktopServices, QDrag
 from PySide6.QtWidgets import (
     QApplication,
@@ -171,6 +174,10 @@ from overleaf_fs.gui.project_tree import (
 )
 from overleaf_fs.gui.overleaf_login import OverleafLoginDialog, WEBENGINE_AVAILABLE
 from overleaf_fs.gui.profile_root_ui import choose_profile_root_directory
+
+# Maximum age for an automatic Overleaf sync, measured from the last
+# successful sync time recorded in `_last_synced`.
+AUTO_SYNC_MAX_AGE_HOURS = 1
 
 
 class _StatusLabel(QLabel):
@@ -516,6 +523,19 @@ class MainWindow(QMainWindow):
         # this after the event loop exits.
         self._launch_profile_manager: bool = False
 
+        # Lightweight, non-interactive auto-sync mechanism. A timer
+        # periodically checks whether the last successful Overleaf sync
+        # is older than AUTO_SYNC_MAX_AGE_HOURS. If so, a quiet sync is
+        # attempted without prompting for login; on success, the local
+        # cache is reloaded from disk.
+        self._auto_sync_in_progress: bool = False
+        self._auto_sync_timer = QTimer(self)
+        self._auto_sync_timer.setSingleShot(False)
+        # Check every 10 minutes; the helper will decide whether a sync
+        # is actually needed based on `_last_synced`.
+        self._auto_sync_timer.timeout.connect(self._auto_sync_tick)
+        self._auto_sync_timer.start(10 * 60 * 1000)  # Timer interval in milliseconds
+
         # Ensure that the profile root directory is configured before we
         # attempt to load directory structure or synchronize overleaf data.
         # On a clean first run, this will prompt the user to choose a
@@ -727,6 +747,93 @@ class MainWindow(QMainWindow):
             "Sync and cache status",
             "Sync and cache status:\n\n" + self._sync_status_summary(),
         )
+
+    def _auto_sync_tick(self) -> None:
+        """Periodic timer callback for automatic Overleaf sync.
+
+        This simply delegates to :meth:`_auto_sync_if_stale`, which
+        decides whether a quiet sync should be attempted based on the
+        age of the last successful sync.
+        """
+        self._auto_sync_if_stale()
+
+    def _auto_sync_if_stale(self) -> None:
+        """Attempt a non-interactive Overleaf sync if the cache is stale.
+
+        This helper is designed to be unobtrusive:
+
+        * It never prompts for login; if a valid cookie is not
+          available, the call is a no-op.
+        * It only attempts a sync when the last successful sync time
+          is older than :data:`AUTO_SYNC_MAX_AGE_HOURS`.
+        * Errors are treated as soft failures; the user can always
+          trigger a full sync manually via the toolbar.
+        """
+        # Avoid overlapping sync attempts if the timer fires again
+        # while a previous auto-sync is still running.
+        if getattr(self, "_auto_sync_in_progress", False):
+            return
+
+        # If we have never successfully synced, rely on the explicit
+        # startup/toolbar sync rather than trying to auto-sync. This
+        # avoids repeatedly probing profiles that have never been set up.
+        if self._last_synced is None:
+            return
+
+        now = datetime.now()
+        age = now - self._last_synced
+        age_hours = age.total_seconds() / 3600.0
+        if age_hours < AUTO_SYNC_MAX_AGE_HOURS:
+            return
+
+        self._auto_sync_in_progress = True
+        try:
+            self._auto_sync_with_overleaf()
+        finally:
+            self._auto_sync_in_progress = False
+
+    def _auto_sync_with_overleaf(self) -> None:
+        """Perform a quiet Overleaf sync if possible.
+
+        This mirrors the successful path of :meth:`_on_sync_with_overleaf`
+        but deliberately avoids any login prompts or modal error
+        dialogs. If a valid cookie is present, the remote project list
+        is refreshed and the local cache is reloaded from disk. If not,
+        the method simply returns without changing the current view.
+        """
+        try:
+            # Attempt a sync using any saved cookie for the active
+            # profile. If the cookie is missing or expired, we skip
+            # auto-sync and leave the local data unchanged.
+            sync_overleaf_projects_for_active_profile()
+        except CookieRequiredError:
+            # No valid cookie is available; auto-sync is a no-op in
+            # this case. The user can always perform a full sync via
+            # the toolbar, which will offer the login flow.
+            return
+        except requests.exceptions.RequestException as exc:
+            # Network-related errors are treated as soft failures; we
+            # keep the last-saved data and optionally log to stderr.
+            print(f"[OverleafFS] Auto-sync network error: {exc}", file=sys.stderr)
+            return
+        except Exception as exc:  # pragma: no cover - defensive
+            # Any other unexpected error is logged and ignored so that
+            # auto-sync never disrupts the user with surprise dialogs.
+            print(f"[OverleafFS] Auto-sync unexpected error: {exc}", file=sys.stderr)
+            return
+
+        # On success, record the sync time and reload from disk so the
+        # UI reflects the new data.
+        self._set_last_synced_now()
+        self._on_reload_from_disk()
+
+        status = self.statusBar()
+        if status is not None:
+            synced_str = self._format_timestamp_for_display(self._last_synced)
+            status.showMessage(
+                f"Auto-synced with Overleaf (last sync: {synced_str})",
+                5000,
+            )
 
     def initialize_data(self) -> None:
         """Load projects and directory structure from disk and perform an initial Overleaf sync.
@@ -1164,12 +1271,27 @@ class MainWindow(QMainWindow):
                 # in that case we simply leave whatever selection Qt chooses.
                 pass
 
-            # Ensure the proxy model's folder filter matches the restored
-            # selection, even if the tree did not emit a selection-changed
-            # signal (for example, when the same node remains selected).
-            if isinstance(current_key, (str, type(None))):
-                self._current_folder_key = current_key
-                self._proxy.setFolderKey(current_key)
+            # Align the proxy model's folder filter and our internal tracking
+            # with the folder that is *actually* selected in the tree after
+            # the reload, rather than assuming that `current_key` was applied
+            # successfully. This avoids situations where the tree highlight
+            # and the table contents disagree after a reload or sync.
+            selected_indexes = self._tree.selectedIndexes()
+            selected_key = current_key
+
+            if selected_indexes:
+                tree_model = self._tree.model()
+                if tree_model is not None:
+                    idx = selected_indexes[0]
+                    # The folder key is stored under FolderPathRole for
+                    # regular folders and special nodes (All, Pinned, etc.).
+                    maybe_key = tree_model.data(idx, FolderPathRole)
+                    if isinstance(maybe_key, (str, type(None))):
+                        selected_key = maybe_key
+
+            if isinstance(selected_key, (str, type(None))):
+                self._current_folder_key = selected_key
+                self._proxy.setFolderKey(selected_key)
 
             # Record that we have just loaded projects and directory structure from disk.
             self._set_last_loaded_now()
@@ -1494,6 +1616,10 @@ class MainWindow(QMainWindow):
         updated to match the folder that was just clicked so that the
         tree highlight and the table filter remain in sync.
         """
+        # Before responding to the new selection, give the auto-sync
+        # helper a chance to refresh stale data without prompting.
+        self._auto_sync_if_stale()
+
         reload_triggered = self._check_external_file_change()
 
         # If an external-change reload rebuilt the tree, it may have
