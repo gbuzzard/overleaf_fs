@@ -603,6 +603,133 @@ def plan_folder_move(
     return FolderMovePlan(**plan_kwargs)  # type: ignore[arg-type]
 
 
+# --- New helpers for applying and performing folder moves ---
+
+def apply_folder_move(
+    plan: FolderMovePlan,
+    path: Optional[Path] = None,
+) -> LocalDirectoryStructure:
+    """Apply a previously computed ``FolderMovePlan`` to the on-disk structure.
+
+    This mutating helper loads the current ``LocalDirectoryStructure``
+    from disk, applies the folder and project-folder rewrites
+    described in ``plan``, and then saves the result back to disk.
+
+    The plan itself is treated as read-only; callers are responsible
+    for ensuring that it was computed against the same directory-
+    structure file (or at least a compatible snapshot). In typical
+    usage, callers will:
+
+    * Call :func:`plan_folder_move` to compute a plan.
+    * Optionally present a summary/confirmation to the user.
+    * If confirmed, call :func:`apply_folder_move` to apply it.
+
+    Args:
+        plan: A ``FolderMovePlan`` previously returned by
+            :func:`plan_folder_move`.
+        path: Optional explicit path to the directory-structure JSON.
+            If omitted, the default path is used.
+
+    Returns:
+        LocalDirectoryStructure: The updated local directory structure
+        after applying the move.
+
+    Raises:
+        ValueError: If ``plan.is_valid`` is False.
+    """
+    if not plan.is_valid:
+        raise ValueError(plan.error or "Invalid folder move plan.")
+
+    # Load the current structure from disk.
+    loc_dir_struct = load_directory_structure(path)
+
+    # If the plan is a no-op (no folders/projects changed), simply
+    # return the current structure unchanged.
+    if plan.num_folders_changed == 0 and plan.num_projects_changed == 0:
+        return loc_dir_struct
+
+    # Apply folder renames to the explicit folder list.
+    if plan.folder_renames:
+        updated_folders: List[str] = []
+        renames = plan.folder_renames
+        for folder in loc_dir_struct.folders:
+            new_folder = renames.get(folder, folder)
+            if new_folder:
+                updated_folders.append(new_folder)
+        # De-duplicate and sort for a stable, compact representation.
+        loc_dir_struct.folders = sorted({f for f in updated_folders if f})
+
+    # Apply project-folder changes.
+    if plan.project_folder_changes:
+        changes = plan.project_folder_changes
+        for proj_id, change in changes.items():
+            local = loc_dir_struct.projects.get(proj_id)
+            if local is None:
+                # It is unlikely but possible that a project appears in
+                # the plan but is missing from the current structure.
+                # In that case, create a minimal entry anchored at the
+                # new folder so that the tree remains consistent.
+                new_folder = change.get("new_folder")
+                local = ProjectLocal(
+                    folder=new_folder,
+                    notes=None,
+                    pinned=False,
+                    hidden=False,
+                )
+                loc_dir_struct.projects[proj_id] = local
+            else:
+                new_folder = change.get("new_folder")
+                if new_folder is not None:
+                    local.folder = new_folder
+
+    # Persist the updated structure.
+    save_directory_structure(loc_dir_struct, path)
+    return loc_dir_struct
+
+
+def move_folder(
+    old_root: str,
+    new_parent: Optional[str],
+    path: Optional[Path] = None,
+) -> FolderMovePlan:
+    """High-level helper to move a folder subtree on disk.
+
+    This convenience function combines :func:`plan_folder_move` and
+    :func:`apply_folder_move` into a single call:
+
+    * A ``FolderMovePlan`` is computed for the requested move.
+    * If the plan is invalid (``is_valid`` is False), a ``ValueError``
+      is raised and no changes are applied.
+    * If the plan is valid and non-empty, it is applied to the on-disk
+      directory structure.
+    * The plan is returned to the caller for logging or UI feedback.
+
+    Args:
+        old_root: Existing folder path to move (subtree root), e.g.
+            ``"Admin/Misc"``.
+        new_parent: Target parent folder path, or ``None``/``""`` for
+            the Home (top-level) folder.
+        path: Optional explicit path to the directory-structure JSON.
+            If omitted, the default path is used.
+
+    Returns:
+        FolderMovePlan: The plan describing the move that was applied.
+
+    Raises:
+        ValueError: If the prospective move is structurally invalid.
+    """
+    plan = plan_folder_move(old_root=old_root, new_parent=new_parent, path=path)
+    if not plan.is_valid:
+        raise ValueError(plan.error or "Invalid folder move request.")
+
+    # Apply the move only if there is something to do; this keeps the
+    # operation idempotent for no-op moves.
+    if plan.num_folders_changed > 0 or plan.num_projects_changed > 0:
+        apply_folder_move(plan, path=path)
+
+    return plan
+
+
 def move_projects_to_folder(
     project_ids: Iterable[str],
     folder_path: Optional[str],

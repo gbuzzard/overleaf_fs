@@ -148,6 +148,7 @@ from overleaf_fs.core.directory_structure_store import (
     move_projects_to_folder,
     set_projects_pinned,
     plan_folder_move,
+    move_folder,
 )
 from overleaf_fs.core.config import (
     get_profile_root_dir_optional,
@@ -1681,9 +1682,9 @@ class MainWindow(QMainWindow):
     def _format_folder_move_plan(self, plan) -> str:
         """Return a human-readable summary of a prospective folder move.
 
-        This helper is used by the development-only folder-move preview
-        and is structured so that it can be re-used later in a real
-        confirm-and-apply dialog.
+        This helper is used when confirming a folder drag-and-drop
+        operation and is structured so that the same summary can be
+        re-used for logging or future UI refinements.
         """
         old_root = plan.old_root or "(Home)"
         new_root = plan.new_root or "(invalid target)"
@@ -1714,15 +1715,18 @@ class MainWindow(QMainWindow):
         return "\n".join(lines)
 
     def _on_move_folder_requested(self, old_root: object, new_parent: object) -> None:
-        """Development-only handler for folder drag-and-drop requests.
+        """
+        Slot called when the tree requests moving a folder subtree.
 
-        This slot is intended to be wired to a future
-        ``ProjectTree.moveFolderRequested`` signal. For now it computes
-        a prospective move plan and shows a preview dialog describing
-        what *would* change, without modifying any on-disk data.
+        This handler is invoked when the user drags one folder onto
+        another in the tree. It computes a prospective move plan,
+        presents a confirmation dialog summarizing the impact, and, if
+        confirmed, applies the move by updating the local
+        directory-structure data on disk.
 
-        In a later phase, this handler can be extended to perform a
-        real confirm-and-apply sequence using the same plan data.
+        After a successful move, the project index and folder tree are
+        reloaded so that the new layout is reflected in the UI, and the
+        moved folder is selected in the tree.
         """
         # Before working with the directory-structure data, check for
         # external changes and offer to reload if needed.
@@ -1735,6 +1739,8 @@ class MainWindow(QMainWindow):
         if not isinstance(new_parent, (str, type(None))):
             return
 
+        # First, compute a prospective plan so we can summarize the
+        # effect of the move before making any changes on disk.
         plan = plan_folder_move(old_root, new_parent)
 
         if not getattr(plan, "is_valid", True):
@@ -1757,16 +1763,47 @@ class MainWindow(QMainWindow):
 
         preview_text = self._format_folder_move_plan(plan)
         message = (
-            "Development preview only — no changes will be written.\n\n"
-            f"{preview_text}"
+            f"{preview_text}\n\n"
+            "Apply this move now?"
         )
 
-        moveFolderRequested = Signal(object, object)
-        QMessageBox.information(
+        reply = QMessageBox.question(
             self,
-            "Folder move preview (development)",
+            "Move folder",
             message,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
         )
+        if reply != QMessageBox.Yes:
+            return
+
+        # Apply the move using the high-level helper, which will
+        # recompute the plan against the latest on-disk structure.
+        try:
+            applied_plan = move_folder(old_root=old_root, new_parent=new_parent)
+        except ValueError as exc:
+            QMessageBox.warning(
+                self,
+                "Error moving folder",
+                f"Could not move folder '{old_root}':\n{exc}",
+            )
+            return
+        except Exception as exc:  # pragma: no cover - defensive
+            QMessageBox.warning(
+                self,
+                "Error moving folder",
+                f"An unexpected error occurred while moving the folder:\n{exc}",
+            )
+            return
+
+        # After applying the move, reload projects and folders so the
+        # tree and table reflect the new layout. If we know the new
+        # root path, remember it so that the moved folder is selected.
+        new_root = getattr(applied_plan, "new_root", None)
+        if isinstance(new_root, str):
+            self._current_folder_key = new_root
+
+        self._load_projects()
 
     def _on_move_projects(self, project_ids: list, folder_path: object) -> None:
         """
