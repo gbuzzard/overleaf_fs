@@ -20,7 +20,7 @@ name = "overleaf_fs"
 #    Give the release a title and (optionally) release notes
 #    Click Publish release
 # 4. GitHub Actions will publish to PyPI.
-version = "0.1.3"
+version = "0.1.4"
 description = "GUI-based project organization for Overleaf"
 keywords = ["overleaf", "file system"]
 readme = "README.rst"

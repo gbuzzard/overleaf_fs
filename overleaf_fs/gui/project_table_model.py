@@ -112,13 +112,19 @@ class ProjectTableModel(QAbstractTableModel):
     def set_projects(self, project_index: ProjectsIndex) -> None:
         """
         Replace the current list of projects with the values from
-        ``project_index``.
+        ``project_index`` and notify attached views.
 
         The provided index is a mapping from project id to
         ``ProjectRecord``. We convert this to a flat list, which is
         what Qt expects for a table model. The ordering is not
         guaranteed; a higher-level ``QSortFilterProxyModel`` can
         impose a user-facing sorting when attached to a view.
+
+        This method wraps the internal data replacement in
+        ``beginResetModel()``/``endResetModel()`` so that any attached
+        views (and proxy models) are fully refreshed whenever the
+        project list changes, including after a reload from disk or a
+        sync with Overleaf.
 
         Args:
             project_index (ProjectsIndex): Mapping from project id to

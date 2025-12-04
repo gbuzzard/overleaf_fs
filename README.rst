@@ -9,3 +9,5 @@ OverleafFS: GUI-based project browser for Overleaf LaTeX Projects
 * Persistent caching of Overleaf credentials to minimize logins.
 * Ability to share folder structure across multiple computers using Dropbox or other cloud-based storage.
 
+See full documentation at https://overleaf-fs.readthedocs.io/
+
