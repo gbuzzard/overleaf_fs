@@ -147,6 +147,7 @@ from overleaf_fs.core.directory_structure_store import (
     delete_folder,
     move_projects_to_folder,
     set_projects_pinned,
+    plan_folder_move,
 )
 from overleaf_fs.core.config import (
     get_profile_root_dir_optional,
@@ -574,6 +575,7 @@ class MainWindow(QMainWindow):
         self._tree.renameFolderRequested.connect(self._on_rename_folder)
         self._tree.deleteFolderRequested.connect(self._on_delete_folder)
         self._tree.moveProjectsRequested.connect(self._on_move_projects)
+        self._tree.moveFolderRequested.connect(self._on_move_folder_requested)
         # Track user-driven expansion/collapse so we can persist the tree
         # state across application restarts.
         self._tree.expanded.connect(self._on_tree_expanded)
@@ -1675,6 +1677,96 @@ class MainWindow(QMainWindow):
             return
 
         self._load_projects()
+
+    def _format_folder_move_plan(self, plan) -> str:
+        """Return a human-readable summary of a prospective folder move.
+
+        This helper is used by the development-only folder-move preview
+        and is structured so that it can be re-used later in a real
+        confirm-and-apply dialog.
+        """
+        old_root = plan.old_root or "(Home)"
+        new_root = plan.new_root or "(invalid target)"
+
+        lines: list[str] = []
+        lines.append("Move folder:")
+        lines.append(f"  From: {old_root}")
+        lines.append(f"  To:   {new_root}")
+        lines.append("")
+        lines.append("Summary:")
+        lines.append(f"  Folders affected:  {plan.num_folders_changed}")
+        lines.append(f"  Projects affected: {plan.num_projects_changed}")
+
+        if getattr(plan, "conflicting_folders", None):
+            lines.append("")
+            lines.append("Merges into existing folders:")
+            # Show a small number of conflicts explicitly; if there are
+            # many, list the first few and summarize the remainder.
+            max_list = 10
+            conflicts = list(plan.conflicting_folders)
+            shown = conflicts[:max_list]
+            for path in shown:
+                lines.append(f"  {path}")
+            remaining = len(conflicts) - len(shown)
+            if remaining > 0:
+                lines.append(f"  (+ {remaining} additional folder(s))")
+
+        return "\n".join(lines)
+
+    def _on_move_folder_requested(self, old_root: object, new_parent: object) -> None:
+        """Development-only handler for folder drag-and-drop requests.
+
+        This slot is intended to be wired to a future
+        ``ProjectTree.moveFolderRequested`` signal. For now it computes
+        a prospective move plan and shows a preview dialog describing
+        what *would* change, without modifying any on-disk data.
+
+        In a later phase, this handler can be extended to perform a
+        real confirm-and-apply sequence using the same plan data.
+        """
+        # Before working with the directory-structure data, check for
+        # external changes and offer to reload if needed.
+        self._check_external_file_change()
+
+        if not isinstance(old_root, str) or not old_root:
+            return
+
+        # new_parent may be "" (Home), a folder path string, or None.
+        if not isinstance(new_parent, (str, type(None))):
+            return
+
+        plan = plan_folder_move(old_root, new_parent)
+
+        if not getattr(plan, "is_valid", True):
+            # Invalid structural move (e.g. moving into own subtree).
+            message = getattr(plan, "error", None) or "The requested folder move is not valid."
+            QMessageBox.information(
+                self,
+                "Cannot move folder",
+                message,
+            )
+            return
+
+        if plan.num_folders_changed == 0 and plan.num_projects_changed == 0:
+            QMessageBox.information(
+                self,
+                "No changes",
+                "This move would not change any folders or projects.",
+            )
+            return
+
+        preview_text = self._format_folder_move_plan(plan)
+        message = (
+            "Development preview only — no changes will be written.\n\n"
+            f"{preview_text}"
+        )
+
+        moveFolderRequested = Signal(object, object)
+        QMessageBox.information(
+            self,
+            "Folder move preview (development)",
+            message,
+        )
 
     def _on_move_projects(self, project_ids: list, folder_path: object) -> None:
         """
